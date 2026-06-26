@@ -142,7 +142,7 @@ SelfPilot/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/<your-username>/SelfPilot.git
+git clone https://github.com/xingyuanshenshuang/SelfPilot.git
 cd SelfPilot
 
 # 2. 安装前端依赖
@@ -177,7 +177,7 @@ npm run tauri:dev
 1. **克隆仓库**
 
    ```bash
-   git clone https://github.com/<your-username>/SelfPilot.git
+   git clone https://github.com/xingyuanshenshuang/SelfPilot.git
    cd SelfPilot
    ```
 
@@ -394,6 +394,6 @@ of this software and associated documentation files...
 
 **SelfPilot** · 让每一个长期目标都拥有清晰的执行路径
 
-[报告问题](https://github.com/<your-username>/SelfPilot/issues) · [发起讨论](https://github.com/<your-username>/SelfPilot/discussions)
+[报告问题](https://github.com/xingyuanshenshuang/SelfPilot/issues) · [发起讨论](https://github.com/xingyuanshenshuang/SelfPilot/discussions)
 
 </div>
