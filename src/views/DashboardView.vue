@@ -16,6 +16,13 @@ const message = useMessage();
 const today = computed(() => format(new Date(), "yyyy-MM-dd"));
 const encouragement = ref("");
 
+/** 只展示根目标（总目标），子目标的进度已汇总到父目标 */
+const rootGoals = computed(() =>
+  goalStore.goals.filter(
+    (g) => g.parent_id === null || g.parent_id === undefined,
+  ),
+);
+
 onMounted(async () => {
   await Promise.all([
     taskStore.fetchAll(),
@@ -102,11 +109,11 @@ async function refresh() {
         </div>
       </template>
       <div
-        v-if="goalStore.goals.length > 0"
+        v-if="rootGoals.length > 0"
         class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
       >
         <div
-          v-for="goal in goalStore.goals"
+          v-for="goal in rootGoals"
           :key="goal.id"
           class="flex items-center gap-3 p-3 rounded-lg border border-gray-100 hover:shadow-sm transition"
         >

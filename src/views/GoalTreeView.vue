@@ -33,6 +33,7 @@ import type {
   CreateTaskInput,
   UpdateTaskInput,
   CreateGoalInput,
+  UpdateGoalInput,
   RepeatSplitInput,
 } from "@/types";
 import { STATUS_META } from "@/types";
@@ -42,9 +43,11 @@ const goalStore = useGoalStore();
 const message = useMessage();
 const dialog = useDialog();
 
-// ===== 创建目标（总目标 or 子目标）=====
-const showCreateGoal = ref(false);
+// ===== 创建/编辑目标（总目标 or 子目标）=====
+const showGoalModal = ref(false);
+const goalModalMode = ref<"create" | "edit">("create");
 const createGoalParentId = ref<string | null>(null); // null=总目标, string=子目标
+const editingGoalId = ref<string>("");
 const goalForm = reactive({
   name: "",
   deadline: null as number | null,
@@ -109,17 +112,30 @@ onMounted(async () => {
   await goalStore.fetchProgresses();
 });
 
-// ===== 目标创建 =====
+// ===== 目标创建/编辑 =====
 function openCreateGoalModal(parentId: string | null) {
+  goalModalMode.value = "create";
   createGoalParentId.value = parentId;
+  editingGoalId.value = "";
   goalForm.name = "";
   goalForm.deadline = null;
   goalForm.total_qty = 0;
   goalForm.unit = "个";
-  showCreateGoal.value = true;
+  showGoalModal.value = true;
 }
 
-async function handleCreateGoal() {
+function openEditGoalModal(goal: Goal) {
+  goalModalMode.value = "edit";
+  editingGoalId.value = goal.id;
+  createGoalParentId.value = goal.parent_id;
+  goalForm.name = goal.name;
+  goalForm.deadline = goal.deadline ? parseISO(goal.deadline).getTime() : null;
+  goalForm.total_qty = goal.total_qty;
+  goalForm.unit = goal.unit || "个";
+  showGoalModal.value = true;
+}
+
+async function handleSaveGoal() {
   if (!goalForm.name.trim()) {
     message.warning("请输入目标名称");
     return;
@@ -128,23 +144,35 @@ async function handleCreateGoal() {
     ? format(new Date(goalForm.deadline), "yyyy-MM-dd")
     : null;
   try {
-    const input: CreateGoalInput = {
-      name: goalForm.name,
-      parent_id: createGoalParentId.value,
-      deadline,
-      total_qty: goalForm.total_qty,
-      unit: goalForm.unit,
-    };
-    await goalStore.createGoal(input);
-    message.success(
-      createGoalParentId.value ? "子目标创建成功" : "总目标创建成功",
-    );
-    showCreateGoal.value = false;
+    if (goalModalMode.value === "create") {
+      const input: CreateGoalInput = {
+        name: goalForm.name,
+        parent_id: createGoalParentId.value,
+        deadline,
+        total_qty: goalForm.total_qty,
+        unit: goalForm.unit,
+      };
+      await goalStore.createGoal(input);
+      message.success(
+        createGoalParentId.value ? "子目标创建成功" : "总目标创建成功",
+      );
+      if (createGoalParentId.value) {
+        expandedNodes.value.add(createGoalParentId.value);
+      }
+    } else {
+      const input: UpdateGoalInput = {
+        id: editingGoalId.value,
+        name: goalForm.name,
+        deadline,
+        total_qty: goalForm.total_qty,
+        unit: goalForm.unit,
+      };
+      await goalApi.updateGoal(input);
+      message.success("目标已更新");
+    }
+    showGoalModal.value = false;
     await goalStore.fetchGoalTree();
     await goalStore.fetchProgresses();
-    if (createGoalParentId.value) {
-      expandedNodes.value.add(createGoalParentId.value);
-    }
   } catch (e) {
     message.error(String(e));
   }
@@ -206,9 +234,10 @@ async function handleRepeatSplit() {
     return;
   }
   const start_date = format(new Date(repeatForm.start_date), "yyyy-MM-dd");
-  const end_date = repeatForm.is_repeat && repeatForm.end_date
-    ? format(new Date(repeatForm.end_date), "yyyy-MM-dd")
-    : null;
+  const end_date =
+    repeatForm.is_repeat && repeatForm.end_date
+      ? format(new Date(repeatForm.end_date), "yyyy-MM-dd")
+      : null;
 
   if (repeatForm.is_repeat && !repeatForm.end_date) {
     message.warning("重复任务请选择结束日期");
@@ -525,7 +554,9 @@ function handleTaskAction(key: string, task: Task) {
             <div class="text-xs text-gray-500 flex items-center gap-3 mt-0.5">
               <span
                 :class="{
-                  'text-red-500': getDaysLeft(rootNode.goal.deadline).includes('逾期'),
+                  'text-red-500': getDaysLeft(rootNode.goal.deadline).includes(
+                    '逾期',
+                  ),
                 }"
               >
                 {{ getDaysLeft(rootNode.goal.deadline) }}
@@ -533,10 +564,13 @@ function handleTaskAction(key: string, task: Task) {
               <span v-if="rootNode.goal.total_qty > 0">
                 总量：{{ rootNode.goal.total_qty }}{{ rootNode.goal.unit }}
               </span>
-              <span>
-                进度：{{ Math.round(rootNode.progress * 100) }}%
-              </span>
-              <NTag v-if="rootNode.is_completed" size="tiny" type="success" :bordered="false">
+              <span> 进度：{{ Math.round(rootNode.progress * 100) }}% </span>
+              <NTag
+                v-if="rootNode.is_completed"
+                size="tiny"
+                type="success"
+                :bordered="false"
+              >
                 已完成
               </NTag>
             </div>
@@ -555,7 +589,9 @@ function handleTaskAction(key: string, task: Task) {
               size="tiny"
               type="primary"
               ghost
-              :disabled="!rootNode.goal.deadline || rootNode.goal.total_qty <= 0"
+              :disabled="
+                !rootNode.goal.deadline || rootNode.goal.total_qty <= 0
+              "
               @click="handleAutoSplit(rootNode.goal)"
             >
               <template #icon><Icon icon="mdi:auto-fix" /></template>
@@ -589,19 +625,31 @@ function handleTaskAction(key: string, task: Task) {
               <template #icon><Icon icon="mdi:plus-box-outline" /></template>
               任务
             </NButton>
+            <NButton
+              size="tiny"
+              quaternary
+              @click="openEditGoalModal(rootNode.goal)"
+            >
+              <Icon icon="mdi:pencil-outline" />
+            </NButton>
             <NPopconfirm @positive-click="handleDeleteGoal(rootNode.goal)">
               <template #trigger>
                 <NButton size="tiny" quaternary type="error">
                   <Icon icon="mdi:delete" />
                 </NButton>
               </template>
-              确定删除总目标"{{ rootNode.goal.name }}"？所有子目标和任务将一并删除。
+              确定删除总目标"{{
+                rootNode.goal.name
+              }}"？所有子目标和任务将一并删除。
             </NPopconfirm>
           </NSpace>
         </div>
 
         <!-- 总目标展开内容 -->
-        <div v-if="expandedNodes.has(rootNode.goal.id)" class="mt-3 ml-8 space-y-2">
+        <div
+          v-if="expandedNodes.has(rootNode.goal.id)"
+          class="mt-3 ml-8 space-y-2"
+        >
           <!-- 子目标列表 -->
           <NCard
             v-for="subNode in rootNode.sub_goals"
@@ -624,9 +672,15 @@ function handleTaskAction(key: string, task: Task) {
                 class="text-gray-400"
               />
               <Icon
-                :icon="subNode.is_completed ? 'mdi:check-circle' : 'mdi:target-variant'"
+                :icon="
+                  subNode.is_completed
+                    ? 'mdi:check-circle'
+                    : 'mdi:target-variant'
+                "
                 width="16"
-                :class="subNode.is_completed ? 'text-green-500' : 'text-blue-500'"
+                :class="
+                  subNode.is_completed ? 'text-green-500' : 'text-blue-500'
+                "
               />
               <span
                 class="flex-1 text-sm font-medium"
@@ -644,7 +698,12 @@ function handleTaskAction(key: string, task: Task) {
               <span class="text-xs text-gray-500">
                 {{ Math.round(subNode.progress * 100) }}%
               </span>
-              <NTag v-if="subNode.is_completed" size="tiny" type="success" :bordered="false">
+              <NTag
+                v-if="subNode.is_completed"
+                size="tiny"
+                type="success"
+                :bordered="false"
+              >
                 完成
               </NTag>
               <NSpace :size="2" @click.stop>
@@ -653,7 +712,9 @@ function handleTaskAction(key: string, task: Task) {
                   quaternary
                   type="primary"
                   ghost
-                  :disabled="!subNode.goal.deadline || subNode.goal.total_qty <= 0"
+                  :disabled="
+                    !subNode.goal.deadline || subNode.goal.total_qty <= 0
+                  "
                   @click="handleAutoSplit(subNode.goal)"
                 >
                   <Icon icon="mdi:auto-fix" width="14" />
@@ -674,6 +735,13 @@ function handleTaskAction(key: string, task: Task) {
                 >
                   <Icon icon="mdi:plus" width="14" />
                 </NButton>
+                <NButton
+                  size="tiny"
+                  quaternary
+                  @click="openEditGoalModal(subNode.goal)"
+                >
+                  <Icon icon="mdi:pencil-outline" width="14" />
+                </NButton>
                 <NPopconfirm @positive-click="handleDeleteGoal(subNode.goal)">
                   <template #trigger>
                     <NButton size="tiny" quaternary type="error">
@@ -686,7 +754,10 @@ function handleTaskAction(key: string, task: Task) {
             </div>
 
             <!-- 子目标下的任务 -->
-            <div v-if="expandedNodes.has(subNode.goal.id)" class="ml-6 mt-1 space-y-0.5">
+            <div
+              v-if="expandedNodes.has(subNode.goal.id)"
+              class="ml-6 mt-1 space-y-0.5"
+            >
               <div
                 v-for="task in subNode.tasks"
                 :key="task.id"
@@ -699,7 +770,9 @@ function handleTaskAction(key: string, task: Task) {
                 />
                 <span
                   class="flex-1 truncate"
-                  :class="{ 'line-through text-gray-400': task.status === 'done' }"
+                  :class="{
+                    'line-through text-gray-400': task.status === 'done',
+                  }"
                 >
                   {{ task.name }}
                 </span>
@@ -707,7 +780,12 @@ function handleTaskAction(key: string, task: Task) {
                 <span class="text-xs text-gray-500">
                   {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
                 </span>
-                <NTag v-if="task.source === 'manual'" size="tiny" :bordered="false" type="warning">
+                <NTag
+                  v-if="task.source === 'manual'"
+                  size="tiny"
+                  :bordered="false"
+                  type="warning"
+                >
                   手动
                 </NTag>
                 <NDropdown
@@ -720,7 +798,10 @@ function handleTaskAction(key: string, task: Task) {
                   </NButton>
                 </NDropdown>
               </div>
-              <div v-if="subNode.tasks.length === 0" class="text-xs text-gray-400 py-1 px-3">
+              <div
+                v-if="subNode.tasks.length === 0"
+                class="text-xs text-gray-400 py-1 px-3"
+              >
                 暂无任务
               </div>
             </div>
@@ -746,7 +827,9 @@ function handleTaskAction(key: string, task: Task) {
               />
               <span
                 class="flex-1 truncate"
-                :class="{ 'line-through text-gray-400': task.status === 'done' }"
+                :class="{
+                  'line-through text-gray-400': task.status === 'done',
+                }"
               >
                 {{ task.name }}
               </span>
@@ -775,7 +858,9 @@ function handleTaskAction(key: string, task: Task) {
 
           <!-- 空状态 -->
           <div
-            v-if="rootNode.sub_goals.length === 0 && rootNode.tasks.length === 0"
+            v-if="
+              rootNode.sub_goals.length === 0 && rootNode.tasks.length === 0
+            "
             class="text-sm text-gray-400 py-2"
           >
             暂无子目标和任务，点击上方按钮开始添加
@@ -786,11 +871,17 @@ function handleTaskAction(key: string, task: Task) {
 
     <NEmpty v-else description="还没有目标，点击右上角创建第一个总目标吧" />
 
-    <!-- 创建目标弹窗 -->
+    <!-- 创建/编辑目标弹窗 -->
     <NModal
-      v-model:show="showCreateGoal"
+      v-model:show="showGoalModal"
       preset="card"
-      :title="createGoalParentId ? '创建子目标' : '创建总目标'"
+      :title="
+        goalModalMode === 'edit'
+          ? '编辑目标'
+          : createGoalParentId
+            ? '创建子目标'
+            : '创建总目标'
+      "
       style="width: 480px"
     >
       <NForm label-placement="top">
@@ -823,8 +914,10 @@ function handleTaskAction(key: string, task: Task) {
       </NForm>
       <template #footer>
         <NSpace justify="end">
-          <NButton @click="showCreateGoal = false">取消</NButton>
-          <NButton type="primary" @click="handleCreateGoal">创建</NButton>
+          <NButton @click="showGoalModal = false">取消</NButton>
+          <NButton type="primary" @click="handleSaveGoal">
+            {{ goalModalMode === "edit" ? "保存" : "创建" }}
+          </NButton>
         </NSpace>
       </template>
     </NModal>
@@ -851,17 +944,25 @@ function handleTaskAction(key: string, task: Task) {
             每天重复
           </NCheckbox>
           <span class="text-xs text-gray-400">
-            {{ repeatForm.is_repeat ? '在日期范围内每天生成一个任务' : '只生成一个单次任务' }}
+            {{
+              repeatForm.is_repeat
+                ? "在日期范围内每天生成一个任务"
+                : "只生成一个单次任务"
+            }}
           </span>
         </div>
         <NSpace>
-          <NFormItem :label="repeatForm.is_repeat ? '起始日期' : '完成日期'" :show-feedback="false">
-            <NDatePicker
-              v-model:value="repeatForm.start_date"
-              type="date"
-            />
+          <NFormItem
+            :label="repeatForm.is_repeat ? '起始日期' : '完成日期'"
+            :show-feedback="false"
+          >
+            <NDatePicker v-model:value="repeatForm.start_date" type="date" />
           </NFormItem>
-          <NFormItem v-if="repeatForm.is_repeat" label="结束日期" :show-feedback="false">
+          <NFormItem
+            v-if="repeatForm.is_repeat"
+            label="结束日期"
+            :show-feedback="false"
+          >
             <NDatePicker
               v-model:value="repeatForm.end_date"
               type="date"
@@ -965,7 +1066,9 @@ function handleTaskAction(key: string, task: Task) {
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showBackfillModal = false">取消</NButton>
-          <NButton type="primary" @click="handleConfirmBackfill">确认补完成</NButton>
+          <NButton type="primary" @click="handleConfirmBackfill"
+            >确认补完成</NButton
+          >
         </NSpace>
       </template>
     </NModal>
@@ -1002,7 +1105,9 @@ function handleTaskAction(key: string, task: Task) {
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showReplanModal = false">取消</NButton>
-          <NButton type="warning" @click="handleReplanConfirm">确认重新规划</NButton>
+          <NButton type="warning" @click="handleReplanConfirm"
+            >确认重新规划</NButton
+          >
         </NSpace>
       </template>
     </NModal>

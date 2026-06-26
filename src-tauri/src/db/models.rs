@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// 任务状态枚举
+/// 任务状态枚举（已废弃，保留用于未来类型安全重构）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Pending,
@@ -89,7 +90,8 @@ pub struct GoalTreeNode {
     pub is_completed: bool,
 }
 
-/// 阶段（二级节点，可选）
+/// 阶段（已废弃，仅用于旧版数据备份兼容）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Stage {
     pub id: String,
@@ -101,7 +103,8 @@ pub struct Stage {
     pub created_at: String,
 }
 
-/// 创建阶段的输入参数
+/// 创建阶段的输入参数（已废弃）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateStageInput {
     pub goal_id: String,
@@ -109,7 +112,8 @@ pub struct CreateStageInput {
     pub parent_id: Option<String>,
 }
 
-/// 更新阶段的输入参数
+/// 更新阶段的输入参数（已废弃）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateStageInput {
     pub id: String,
@@ -117,7 +121,8 @@ pub struct UpdateStageInput {
     pub sort_order: Option<i64>,
 }
 
-/// 删除阶段时子任务的处理方式
+/// 删除阶段时子任务的处理方式（已废弃）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeleteStageInput {
     pub id: String,
@@ -125,7 +130,8 @@ pub struct DeleteStageInput {
     pub mode: String,
 }
 
-/// 阶段带进度信息
+/// 阶段带进度信息（已废弃）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct StageWithProgress {
     pub id: String,

@@ -313,7 +313,9 @@ pub async fn get_completion_predictions(
             continue;
         }
 
-        let dl = deadline.unwrap();
+        let Some(dl) = deadline else {
+            continue;
+        };
         let days_to_deadline = (dl - today).num_days();
 
         // 无历史数据

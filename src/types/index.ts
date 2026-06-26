@@ -118,44 +118,6 @@ export interface TodayTask {
 
 export type TaskStatus = "pending" | "partial" | "done" | "skipped";
 
-/** 阶段（二级节点） */
-export interface Stage {
-  id: string;
-  goal_id: string;
-  name: string;
-  parent_id: string | null;
-  path: string;
-  sort_order: number;
-  created_at: string;
-}
-
-/** 阶段带进度信息 */
-export interface StageWithProgress extends Stage {
-  total_plan: number;
-  total_actual: number;
-  /** 完成百分比 0.0 ~ 1.0 */
-  percentage: number;
-  task_count: number;
-}
-
-export interface CreateStageInput {
-  goal_id: string;
-  name: string;
-  parent_id?: string | null;
-}
-
-export interface UpdateStageInput {
-  id: string;
-  name?: string;
-  sort_order?: number;
-}
-
-export interface DeleteStageInput {
-  id: string;
-  /** "detach" 子任务转独立 | "cascade" 级联删除 */
-  mode: "detach" | "cascade";
-}
-
 export interface MoveTaskInput {
   task_id: string;
   stage_id: string | null;
@@ -307,7 +269,8 @@ export interface ExportData {
   version: string;
   exported_at: string;
   goals: Goal[];
-  stages: Stage[];
+  /** 已废弃，保留用于旧版备份兼容 */
+  stages: unknown[];
   tasks: Task[];
   encouragements: Encouragement[];
   settings: Setting[];
