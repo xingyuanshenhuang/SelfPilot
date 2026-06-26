@@ -59,6 +59,7 @@ pub fn run() {
             commands::task::backfill_task,
             commands::task::move_task,
             commands::task::update_task_plan_qty,
+            commands::task::update_task,
             commands::task::delete_task,
             commands::task::list_today_tasks,
             commands::task::list_overdue_tasks,

@@ -48,6 +48,14 @@ export interface CompleteTaskInput {
   actual_qty: number;
 }
 
+/** 更新任务输入（通用：名称、计划日期、计划数量，均可选） */
+export interface UpdateTaskInput {
+  task_id: string;
+  name?: string;
+  plan_date?: string;
+  plan_qty?: number;
+}
+
 export interface ProgressInfo {
   id: string;
   name: string;

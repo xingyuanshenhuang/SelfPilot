@@ -1,7 +1,7 @@
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::models::{CalendarTask, CompleteTaskInput, CreateTaskInput, MoveTaskInput, Task, TodayTask};
+use crate::db::models::{CalendarTask, CompleteTaskInput, CreateTaskInput, MoveTaskInput, Task, TodayTask, UpdateTaskInput};
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 
@@ -289,6 +289,99 @@ pub async fn update_task_plan_qty(
 
     let updated: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&task_id)
+        .fetch_one(&state.0)
+        .await?;
+
+    Ok(updated)
+}
+
+/// 更新任务（通用：名称、计划日期、计划数量）
+///
+/// PRD §4.2 模块二 & 分阶段计划 Sprint 2：
+/// - 支持修改任务名称、计划日期、计划数量
+/// - 修改 plan_qty 时自动标记 is_manual = 1，重新规划时保留
+/// - 修改 plan_qty 时若任务已完成(actual_qty > plan_qty)则截断 actual_qty
+#[tauri::command]
+pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> AppResult<Task> {
+    let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+        .bind(&input.task_id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+
+    let mut updates: Vec<String> = Vec::new();
+    let mut mark_manual = false;
+
+    if let Some(name) = &input.name {
+        if name.trim().is_empty() {
+            return Err(AppError::Param("任务名称不能为空".into()));
+        }
+        updates.push("name = ?".to_string());
+    }
+
+    if let Some(plan_date) = &input.plan_date {
+        // 允许空字符串表示清除日期
+        updates.push("plan_date = ?".to_string());
+        let _ = plan_date; // 绑定在下方动态处理
+    }
+
+    if let Some(plan_qty) = input.plan_qty {
+        if plan_qty < 0.0 {
+            return Err(AppError::Param("计划数量不能为负".into()));
+        }
+        updates.push("plan_qty = ?".to_string());
+        mark_manual = true;
+    }
+
+    if mark_manual {
+        updates.push("is_manual = 1".to_string());
+    }
+
+    if updates.is_empty() {
+        return Err(AppError::Param("未提供任何更新字段".into()));
+    }
+
+    let sql = format!("UPDATE tasks SET {} WHERE id = ?", updates.join(", "));
+
+    // 动态绑定参数
+    let mut q = sqlx::query(&sql);
+    if let Some(name) = &input.name {
+        q = q.bind(name);
+    }
+    if let Some(plan_date) = &input.plan_date {
+        if plan_date.is_empty() {
+            q = q.bind::<Option<String>>(None);
+        } else {
+            q = q.bind(plan_date);
+        }
+    }
+    if let Some(plan_qty) = input.plan_qty {
+        q = q.bind(plan_qty);
+    }
+    q = q.bind(&input.task_id);
+    q.execute(&state.0).await?;
+
+    // 若 plan_qty 变小且小于 actual_qty，截断 actual_qty 并重算状态
+    if let Some(plan_qty) = input.plan_qty {
+        if task.actual_qty > plan_qty {
+            let new_status = if plan_qty > 0.0 && task.actual_qty >= plan_qty {
+                "done"
+            } else if task.actual_qty > 0.0 {
+                "partial"
+            } else {
+                "pending"
+            };
+            sqlx::query("UPDATE tasks SET actual_qty = ?, status = ? WHERE id = ?")
+                .bind(plan_qty)
+                .bind(new_status)
+                .bind(&input.task_id)
+                .execute(&state.0)
+                .await?;
+        }
+    }
+
+    let updated: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+        .bind(&input.task_id)
         .fetch_one(&state.0)
         .await?;
 

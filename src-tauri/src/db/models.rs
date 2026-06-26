@@ -140,6 +140,19 @@ pub struct CompleteTaskInput {
     pub actual_qty: f64,
 }
 
+/// 更新任务的输入参数（通用更新，所有字段可选）
+///
+/// PRD §4.2 模块二 & 分阶段计划 Sprint 2：
+/// - 支持修改任务名称、计划日期、计划数量
+/// - 修改 plan_qty 时自动标记 is_manual = 1（重新规划时保留）
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateTaskInput {
+    pub task_id: String,
+    pub name: Option<String>,
+    pub plan_date: Option<String>,
+    pub plan_qty: Option<f64>,
+}
+
 /// 进度信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressInfo {

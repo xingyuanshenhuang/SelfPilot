@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, reactive } from "vue";
+import { onMounted, ref, reactive, h } from "vue";
 import {
   NCard,
   NButton,
@@ -16,16 +16,24 @@ import {
   NPopconfirm,
   NDataTable,
   NProgress,
+  NDropdown,
   useMessage,
   useDialog,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
+import type { DataTableColumns, DropdownOption, SelectOption } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { useGoalStore } from "@/stores/goalStore";
 import * as taskApi from "@/api/task";
 import * as stageApi from "@/api/stage";
 import * as goalApi from "@/api/goal";
-import type { Goal, Task, StageWithProgress, ReplanPreview } from "@/types";
+import type {
+  Goal,
+  Task,
+  StageWithProgress,
+  ReplanPreview,
+  CreateTaskInput,
+  UpdateTaskInput,
+} from "@/types";
 import { STATUS_META } from "@/types";
 import { format, parseISO, differenceInCalendarDays } from "date-fns";
 
@@ -60,6 +68,34 @@ const newStageName = ref("");
 const showReplanModal = ref(false);
 const replanPreview = ref<ReplanPreview | null>(null);
 const replanGoalId = ref("");
+
+// ===== 任务创建/编辑弹窗 =====
+const showTaskModal = ref(false);
+const taskModalMode = ref<"create" | "edit">("create");
+const taskForm = reactive({
+  task_id: "",
+  goal_id: "",
+  stage_id: null as string | null,
+  name: "",
+  plan_date: null as number | null,
+  plan_qty: 1,
+  unit: "个",
+});
+
+// ===== 补完成弹窗 =====
+const showBackfillModal = ref(false);
+const backfillForm = reactive({
+  task_id: "",
+  task_name: "",
+  goal_id: "",
+  plan_qty: 1,
+  actual_qty: 0,
+  unit: "个",
+});
+
+// ===== 拖拽状态 =====
+const draggingTaskId = ref<string | null>(null);
+const dragOverStageId = ref<string | null>(null);
 
 onMounted(async () => {
   await goalStore.fetchGoals();
@@ -228,16 +264,8 @@ async function handleReplanConfirm() {
 
 /** 重新规划预览表格列 */
 const replanColumns: DataTableColumns<ReplanPreview["items"][0]> = [
-  {
-    title: "日期",
-    key: "plan_date",
-    width: 110,
-  },
-  {
-    title: "任务名",
-    key: "name",
-    ellipsis: { tooltip: true },
-  },
+  { title: "日期", key: "plan_date", width: 110 },
+  { title: "任务名", key: "name", ellipsis: { tooltip: true } },
   {
     title: "原计划",
     key: "old_plan_qty",
@@ -264,6 +292,265 @@ function getDaysLeft(deadline: string | null): string {
   if (days === 0) return "今天截止";
   return `剩余 ${days} 天`;
 }
+
+// ===== 任务创建 =====
+function openCreateTaskModal(goalId: string, stageId: string | null) {
+  taskModalMode.value = "create";
+  taskForm.task_id = "";
+  taskForm.goal_id = goalId;
+  taskForm.stage_id = stageId;
+  taskForm.name = "";
+  taskForm.plan_date = Date.now();
+  taskForm.plan_qty = 1;
+  taskForm.unit = "个";
+  showTaskModal.value = true;
+}
+
+async function handleSaveTask() {
+  if (!taskForm.name.trim()) {
+    message.warning("请输入任务名称");
+    return;
+  }
+  const plan_date = taskForm.plan_date
+    ? format(new Date(taskForm.plan_date), "yyyy-MM-dd")
+    : null;
+  try {
+    if (taskModalMode.value === "create") {
+      const input: CreateTaskInput = {
+        goal_id: taskForm.goal_id,
+        stage_id: taskForm.stage_id,
+        name: taskForm.name,
+        plan_date,
+        plan_qty: taskForm.plan_qty,
+        unit: taskForm.unit,
+      };
+      await taskApi.createTask(input);
+      message.success("任务创建成功");
+    } else {
+      const input: UpdateTaskInput = {
+        task_id: taskForm.task_id,
+        name: taskForm.name,
+        plan_date: plan_date ?? "",
+        plan_qty: taskForm.plan_qty,
+      };
+      await taskApi.updateTask(input);
+      message.success("任务已更新");
+    }
+    showTaskModal.value = false;
+    await loadGoalData(taskForm.goal_id);
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+// ===== 任务编辑 =====
+function openEditTaskModal(task: Task) {
+  taskModalMode.value = "edit";
+  taskForm.task_id = task.id;
+  taskForm.goal_id = task.goal_id;
+  taskForm.stage_id = task.stage_id;
+  taskForm.name = task.name;
+  taskForm.plan_date = task.plan_date
+    ? parseISO(task.plan_date).getTime()
+    : null;
+  taskForm.plan_qty = task.plan_qty;
+  taskForm.unit = task.unit;
+  showTaskModal.value = true;
+}
+
+// ===== 任务操作：完成 / 跳过 / 补完成 / 删除 =====
+async function handleCompleteTask(task: Task, goalId: string) {
+  try {
+    await taskApi.completeTask({
+      task_id: task.id,
+      actual_qty: task.plan_qty,
+    });
+    message.success("任务已完成");
+    await loadGoalData(goalId);
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+async function handleSkipTask(task: Task, goalId: string) {
+  try {
+    await taskApi.skipTask(task.id);
+    message.success("任务已跳过");
+    await loadGoalData(goalId);
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+function openBackfillModal(task: Task) {
+  backfillForm.task_id = task.id;
+  backfillForm.task_name = task.name;
+  backfillForm.goal_id = task.goal_id;
+  backfillForm.plan_qty = task.plan_qty;
+  backfillForm.actual_qty = task.actual_qty;
+  backfillForm.unit = task.unit;
+  showBackfillModal.value = true;
+}
+
+async function handleConfirmBackfill() {
+  try {
+    await taskApi.backfillTask({
+      task_id: backfillForm.task_id,
+      actual_qty: backfillForm.actual_qty,
+    });
+    message.success("补完成已保存");
+    showBackfillModal.value = false;
+    await loadGoalData(backfillForm.goal_id);
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+async function handleDeleteTask(task: Task, goalId: string) {
+  try {
+    await taskApi.deleteTask(task.id);
+    message.success("任务已删除");
+    await loadGoalData(goalId);
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+// ===== 任务移动到阶段（下拉选择） =====
+async function handleMoveTask(
+  task: Task,
+  goalId: string,
+  stageId: string | null,
+) {
+  if (task.stage_id === stageId) return;
+  try {
+    await taskApi.moveTask({ task_id: task.id, stage_id: stageId });
+    message.success(stageId ? "已移动到阶段" : "已转为独立任务");
+    await loadGoalData(goalId);
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+/** 构建某目标下任务的阶段切换选项 */
+function buildStageOptions(goalId: string): SelectOption[] {
+  const stages = stagesByGoal.value[goalId] || [];
+  const opts: SelectOption[] = stages.map((s) => ({
+    label: s.name,
+    value: s.id,
+  }));
+  opts.push({ label: "独立任务", value: "" });
+  return opts;
+}
+
+/** 任务行操作菜单 */
+function buildTaskActions(task: Task): DropdownOption[] {
+  const actions: DropdownOption[] = [];
+  if (task.status !== "done" && task.status !== "skipped") {
+    actions.push({
+      label: "标记完成",
+      key: "complete",
+      icon: () => h(Icon, { icon: "mdi:check-circle-outline" }),
+    });
+  }
+  if (task.status !== "done" && task.status !== "skipped") {
+    actions.push({
+      label: "跳过",
+      key: "skip",
+      icon: () => h(Icon, { icon: "mdi:skip-next-outline" }),
+    });
+  }
+  actions.push({
+    label: "补完成",
+    key: "backfill",
+    icon: () => h(Icon, { icon: "mdi:history" }),
+  });
+  actions.push({
+    label: "编辑",
+    key: "edit",
+    icon: () => h(Icon, { icon: "mdi:pencil-outline" }),
+  });
+  actions.push({ type: "divider", key: "d1" });
+  actions.push({
+    label: "删除",
+    key: "delete",
+    icon: () => h(Icon, { icon: "mdi:delete-outline" }),
+  });
+  return actions;
+}
+
+function handleTaskAction(
+  key: string,
+  task: Task,
+  goalId: string,
+) {
+  switch (key) {
+    case "complete":
+      handleCompleteTask(task, goalId);
+      break;
+    case "skip":
+      handleSkipTask(task, goalId);
+      break;
+    case "backfill":
+      openBackfillModal(task);
+      break;
+    case "edit":
+      openEditTaskModal(task);
+      break;
+    case "delete":
+      dialog.warning({
+        title: "删除任务",
+        content: `确定删除任务"${task.name}"？此操作不可撤销。`,
+        positiveText: "删除",
+        negativeText: "取消",
+        onPositiveClick: () => handleDeleteTask(task, goalId),
+      });
+      break;
+  }
+}
+
+// ===== 拖拽 =====
+function onDragStart(taskId: string) {
+  draggingTaskId.value = taskId;
+}
+
+function onDragEnd() {
+  draggingTaskId.value = null;
+  dragOverStageId.value = null;
+}
+
+function onDragOverStage(stageId: string) {
+  dragOverStageId.value = stageId;
+}
+
+function onDragLeaveStage() {
+  dragOverStageId.value = null;
+}
+
+async function onDropToStage(stageId: string, goalId: string) {
+  const taskId = draggingTaskId.value;
+  draggingTaskId.value = null;
+  dragOverStageId.value = null;
+  if (!taskId) return;
+  const task = (tasksByGoal.value[goalId] || []).find((t) => t.id === taskId);
+  if (!task || task.stage_id === stageId) return;
+  await handleMoveTask(task, goalId, stageId);
+}
+
+async function onDropToStandalone(goalId: string) {
+  const taskId = draggingTaskId.value;
+  draggingTaskId.value = null;
+  dragOverStageId.value = null;
+  if (!taskId) return;
+  const task = (tasksByGoal.value[goalId] || []).find((t) => t.id === taskId);
+  if (!task || !task.stage_id) return;
+  await handleMoveTask(task, goalId, null);
+}
 </script>
 
 <template>
@@ -277,6 +564,14 @@ function getDaysLeft(deadline: string | null): string {
         <template #icon><Icon icon="mdi:plus" /></template>
         创建目标
       </NButton>
+    </div>
+
+    <!-- 拖拽提示 -->
+    <div
+      class="text-xs text-gray-400 flex items-center gap-1 bg-gray-50 px-3 py-1.5 rounded"
+    >
+      <Icon icon="mdi:drag-vertical" width="14" />
+      提示：可拖拽任务到阶段进行归类，或点击任务右侧菜单切换归属
     </div>
 
     <!-- 目标列表 -->
@@ -342,6 +637,15 @@ function getDaysLeft(deadline: string | null): string {
               <template #icon><Icon icon="mdi:folder-plus-outline" /></template>
               添加阶段
             </NButton>
+            <NButton
+              size="tiny"
+              quaternary
+              type="info"
+              @click="openCreateTaskModal(goal.id, null)"
+            >
+              <template #icon><Icon icon="mdi:plus-box-outline" /></template>
+              添加任务
+            </NButton>
             <NPopconfirm @positive-click="handleDeleteGoal(goal)">
               <template #trigger>
                 <NButton size="tiny" quaternary type="error">
@@ -377,7 +681,15 @@ function getDaysLeft(deadline: string | null): string {
           <div
             v-for="stage in stagesByGoal[goal.id] || []"
             :key="stage.id"
-            class="border border-gray-100 rounded-lg"
+            class="border rounded-lg transition-colors"
+            :class="{
+              'border-brand-400 bg-brand-50/30':
+                dragOverStageId === stage.id,
+              'border-gray-100': dragOverStageId !== stage.id,
+            }"
+            @dragover.prevent="onDragOverStage(stage.id)"
+            @dragleave="onDragLeaveStage"
+            @drop.prevent="onDropToStage(stage.id, goal.id)"
           >
             <!-- 阶段头部 -->
             <div
@@ -411,6 +723,14 @@ function getDaysLeft(deadline: string | null): string {
                   stage.task_count
                 }}任务)
               </span>
+              <NButton
+                size="tiny"
+                quaternary
+                type="info"
+                @click.stop="openCreateTaskModal(goal.id, stage.id)"
+              >
+                <Icon icon="mdi:plus" width="14" />
+              </NButton>
               <NPopconfirm @positive-click="handleDeleteStage(stage, goal.id)">
                 <template #trigger>
                   <NButton size="tiny" quaternary type="error" @click.stop>
@@ -428,7 +748,13 @@ function getDaysLeft(deadline: string | null): string {
               <div
                 v-for="task in getStageTasks(goal.id, stage.id)"
                 :key="task.id"
-                class="flex items-center gap-2 px-3 py-1 rounded hover:bg-gray-50 text-sm"
+                class="flex items-center gap-2 px-3 py-1 rounded hover:bg-gray-50 text-sm cursor-grab active:cursor-grabbing"
+                :class="{
+                  'opacity-50': draggingTaskId === task.id,
+                }"
+                draggable="true"
+                @dragstart="onDragStart(task.id)"
+                @dragend="onDragEnd"
               >
                 <Icon
                   :icon="STATUS_META[task.status].icon"
@@ -448,19 +774,38 @@ function getDaysLeft(deadline: string | null): string {
                   {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
                 </span>
                 <NTag
-                  v-if="task.is_manual"
+                  v-if="task.source === 'manual'"
                   size="tiny"
                   :bordered="false"
                   type="warning"
                 >
                   手动
                 </NTag>
+                <NSelect
+                  :value="task.stage_id ?? ''"
+                  :options="buildStageOptions(goal.id)"
+                  size="tiny"
+                  :consistent-menu-width="false"
+                  style="width: 110px"
+                  @update:value="(v: string) => handleMoveTask(task, goal.id, v === '' ? null : v)"
+                  @click.stop
+                />
+                <NDropdown
+                  trigger="click"
+                  :options="buildTaskActions(task)"
+                  @select="(key: string) => handleTaskAction(key, task, goal.id)"
+                  @click.stop
+                >
+                  <NButton size="tiny" quaternary @click.stop>
+                    <Icon icon="mdi:dots-horizontal" width="16" />
+                  </NButton>
+                </NDropdown>
               </div>
               <div
                 v-if="getStageTasks(goal.id, stage.id).length === 0"
                 class="text-xs text-gray-400 py-1 px-3"
               >
-                暂无任务
+                暂无任务，点击 + 添加
               </div>
             </div>
           </div>
@@ -469,17 +814,25 @@ function getDaysLeft(deadline: string | null): string {
           <div
             v-if="getStandaloneTasks(goal.id).length > 0"
             class="space-y-0.5"
+            @dragover.prevent
+            @drop.prevent="onDropToStandalone(goal.id)"
           >
             <div
               v-if="(stagesByGoal[goal.id] || []).length > 0"
               class="text-xs text-gray-400 px-3 py-1"
             >
-              独立任务
+              独立任务（拖拽到阶段可归类）
             </div>
             <div
               v-for="task in getStandaloneTasks(goal.id)"
               :key="task.id"
-              class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 text-sm"
+              class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 text-sm cursor-grab active:cursor-grabbing"
+              :class="{
+                'opacity-50': draggingTaskId === task.id,
+              }"
+              draggable="true"
+              @dragstart="onDragStart(task.id)"
+              @dragend="onDragEnd"
             >
               <Icon
                 :icon="STATUS_META[task.status].icon"
@@ -505,14 +858,25 @@ function getDaysLeft(deadline: string | null): string {
               <span class="text-xs text-gray-500">
                 {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
               </span>
-              <NTag
-                v-if="task.is_manual"
+              <NSelect
+                :value="task.stage_id ?? ''"
+                :options="buildStageOptions(goal.id)"
                 size="tiny"
-                :bordered="false"
-                type="warning"
+                :consistent-menu-width="false"
+                style="width: 110px"
+                @update:value="(v: string) => handleMoveTask(task, goal.id, v === '' ? null : v)"
+                @click.stop
+              />
+              <NDropdown
+                trigger="click"
+                :options="buildTaskActions(task)"
+                @select="(key: string) => handleTaskAction(key, task, goal.id)"
+                @click.stop
               >
-                手动
-              </NTag>
+                <NButton size="tiny" quaternary @click.stop>
+                  <Icon icon="mdi:dots-horizontal" width="16" />
+                </NButton>
+              </NDropdown>
             </div>
           </div>
 
@@ -524,7 +888,7 @@ function getDaysLeft(deadline: string | null): string {
             "
             class="text-sm text-gray-400 py-2"
           >
-            暂无任务，点击"自动拆解"生成每日任务
+            暂无任务，点击"自动拆解"或"添加任务"开始
           </div>
         </div>
       </NCard>
@@ -571,6 +935,88 @@ function getDaysLeft(deadline: string | null): string {
         <NSpace justify="end">
           <NButton @click="showCreate = false">取消</NButton>
           <NButton type="primary" @click="handleCreate">创建</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 创建/编辑任务弹窗 -->
+    <NModal
+      v-model:show="showTaskModal"
+      preset="card"
+      :title="taskModalMode === 'create' ? '添加任务' : '编辑任务'"
+      style="width: 480px"
+    >
+      <NForm label-placement="top">
+        <NFormItem label="任务名称" required>
+          <NInput
+            v-model:value="taskForm.name"
+            placeholder="如：背诵第1单元单词"
+          />
+        </NFormItem>
+        <NFormItem label="计划日期">
+          <NDatePicker
+            v-model:value="taskForm.plan_date"
+            type="date"
+            clearable
+          />
+        </NFormItem>
+        <NSpace>
+          <NFormItem label="计划数量">
+            <NInputNumber v-model:value="taskForm.plan_qty" :min="0" />
+          </NFormItem>
+          <NFormItem label="单位">
+            <NSelect
+              v-model:value="taskForm.unit"
+              :options="unitOptions"
+              style="width: 100px"
+              :disabled="taskModalMode === 'edit'"
+            />
+          </NFormItem>
+        </NSpace>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showTaskModal = false">取消</NButton>
+          <NButton type="primary" @click="handleSaveTask">
+            {{ taskModalMode === "create" ? "创建" : "保存" }}
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 补完成弹窗 -->
+    <NModal
+      v-model:show="showBackfillModal"
+      preset="card"
+      title="补完成"
+      style="width: 420px"
+    >
+      <div class="space-y-3">
+        <div class="text-sm text-gray-600">
+          任务：<strong>{{ backfillForm.task_name }}</strong>
+        </div>
+        <div class="text-xs text-gray-400">
+          计划数量：{{ backfillForm.plan_qty }}{{ backfillForm.unit }}
+        </div>
+        <NFormItem label="实际完成量" :show-feedback="false">
+          <NInputNumber
+            v-model:value="backfillForm.actual_qty"
+            :min="0"
+            :step="1"
+            style="width: 100%"
+          />
+        </NFormItem>
+        <div class="text-xs text-orange-500 bg-orange-50 px-3 py-2 rounded">
+          <Icon icon="mdi:information" class="inline-block mr-1" />
+          补完成仅更新历史任务的实际完成量，不会触发重新分配
+        </div>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showBackfillModal = false">取消</NButton>
+          <NButton type="primary" @click="handleConfirmBackfill">
+            确认补完成
+          </NButton>
         </NSpace>
       </template>
     </NModal>

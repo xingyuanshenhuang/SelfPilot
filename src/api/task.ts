@@ -6,6 +6,7 @@ import type {
   TodayTask,
   MoveTaskInput,
   CalendarTask,
+  UpdateTaskInput,
 } from "@/types";
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
@@ -36,6 +37,11 @@ export async function updateTaskPlanQty(
   planQty: number,
 ): Promise<Task> {
   return invoke("update_task_plan_qty", { taskId, planQty });
+}
+
+/** 通用更新任务（名称、计划日期、计划数量） */
+export async function updateTask(input: UpdateTaskInput): Promise<Task> {
+  return invoke("update_task", { input });
 }
 
 /** 删除任务 */
