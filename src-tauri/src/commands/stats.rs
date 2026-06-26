@@ -83,10 +83,10 @@ pub async fn get_goal_completion_stats(
 ) -> AppResult<Vec<GoalCompletionStat>> {
     let stats: Vec<GoalCompletionStat> = sqlx::query_as(
         "SELECT g.id, g.name,
-                COALESCE(SUM(CASE WHEN t.status != 'skipped' THEN t.plan_qty ELSE 0 END), 0) as total_plan,
-                COALESCE(SUM(t.actual_qty), 0) as total_actual,
+                CAST(COALESCE(SUM(CASE WHEN t.status != 'skipped' THEN t.plan_qty ELSE 0 END), 0) AS REAL) as total_plan,
+                CAST(COALESCE(SUM(t.actual_qty), 0) AS REAL) as total_actual,
                 CASE
-                    WHEN COALESCE(SUM(CASE WHEN t.status != 'skipped' THEN t.plan_qty ELSE 0 END), 0) = 0 THEN 0
+                    WHEN COALESCE(SUM(CASE WHEN t.status != 'skipped' THEN t.plan_qty ELSE 0 END), 0) = 0 THEN 0.0
                     ELSE MIN(1.0, COALESCE(SUM(t.actual_qty), 0) * 1.0
                         / COALESCE(SUM(CASE WHEN t.status != 'skipped' THEN t.plan_qty ELSE 0 END), 0))
                 END as percentage,
@@ -94,6 +94,7 @@ pub async fn get_goal_completion_stats(
                 COUNT(CASE WHEN t.status = 'done' THEN 1 END) as done_count
          FROM goals g
          LEFT JOIN tasks t ON t.goal_id = g.id
+         WHERE g.parent_id IS NULL
          GROUP BY g.id, g.name
          ORDER BY g.created_at",
     )
@@ -198,16 +199,16 @@ pub async fn get_completion_predictions(
     let start_str = seven_days_ago.format("%Y-%m-%d").to_string();
     let end_str = today.format("%Y-%m-%d").to_string();
 
-    // 1. 查询所有目标的基础信息
+    // 1. 查询所有根目标的基础信息
     let goals: Vec<(String, String, Option<String>, f64)> = sqlx::query_as(
-        "SELECT id, name, deadline, total_qty FROM goals ORDER BY created_at",
+        "SELECT id, name, deadline, total_qty FROM goals WHERE parent_id IS NULL ORDER BY created_at",
     )
     .fetch_all(&state.0)
     .await?;
 
     // 2. 查询每个目标的已完成量
     let goal_completed: Vec<(String, f64)> = sqlx::query_as(
-        "SELECT goal_id, COALESCE(SUM(actual_qty), 0) FROM tasks
+        "SELECT goal_id, CAST(COALESCE(SUM(actual_qty), 0) AS REAL) FROM tasks
          WHERE status != 'skipped' GROUP BY goal_id",
     )
     .fetch_all(&state.0)
@@ -221,7 +222,7 @@ pub async fn get_completion_predictions(
 
     // 3. 查询过去7天每个目标的每日完成量（用于计算均速）
     let daily_rows: Vec<(String, String, f64)> = sqlx::query_as(
-        "SELECT goal_id, plan_date, COALESCE(SUM(actual_qty), 0) FROM tasks
+        "SELECT goal_id, plan_date, CAST(COALESCE(SUM(actual_qty), 0) AS REAL) FROM tasks
          WHERE plan_date IS NOT NULL
            AND plan_date >= ? AND plan_date <= ?
            AND status != 'skipped'

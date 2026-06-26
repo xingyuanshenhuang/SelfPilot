@@ -1,23 +1,18 @@
 use tauri::State;
 
 use crate::db::models::{
-    Encouragement, ExportData, Goal, ImportInput, ImportResult, Setting, Stage, Task,
+    Encouragement, ExportData, Goal, ImportInput, ImportResult, Setting, Task,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 
 /// 导出全部数据为 JSON 字符串
-///
-/// PRD §4.2 模块八 & 分阶段计划 Sprint 4：
-/// 完整备份 goals + stages + tasks + encouragements + settings
 #[tauri::command]
 pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
-    let goals: Vec<Goal> = sqlx::query_as("SELECT * FROM goals ORDER BY created_at")
-        .fetch_all(&state.0)
-        .await?;
-    let stages: Vec<Stage> = sqlx::query_as("SELECT * FROM stages ORDER BY sort_order")
-        .fetch_all(&state.0)
-        .await?;
+    let goals: Vec<Goal> =
+        sqlx::query_as("SELECT * FROM goals ORDER BY sort_order, created_at")
+            .fetch_all(&state.0)
+            .await?;
     let tasks: Vec<Task> =
         sqlx::query_as("SELECT * FROM tasks ORDER BY plan_date, sort_order")
             .fetch_all(&state.0)
@@ -31,10 +26,10 @@ pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
         .await?;
 
     let data = ExportData {
-        version: "1.0".to_string(),
+        version: "2.0".to_string(),
         exported_at: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
         goals,
-        stages,
+        stages: vec![], // 已废弃，保留字段兼容旧备份
         tasks,
         encouragements,
         settings,
@@ -46,11 +41,7 @@ pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
 
 /// 导入数据
 ///
-/// PRD §4.2 模块八 & 分阶段计划 Sprint 4：
-/// conflict_mode:
-///   - "skip": ID 冲突时跳过
-///   - "overwrite": ID 冲突时覆盖
-///   - "rename": ID 冲突时生成新 ID
+/// conflict_mode: "skip" | "overwrite" | "rename"
 #[tauri::command]
 pub async fn import_data(
     input: ImportInput,
@@ -78,10 +69,8 @@ pub async fn import_data(
         settings_imported: 0,
     };
 
-    // 用于 rename 模式下的 ID 映射（外键关联）
     use std::collections::HashMap;
     let mut goal_id_map: HashMap<String, String> = HashMap::new();
-    let mut stage_id_map: HashMap<String, String> = HashMap::new();
 
     // 导入 goals
     for g in data.goals {
@@ -112,17 +101,20 @@ pub async fn import_data(
             }
             "overwrite" => {
                 sqlx::query(
-                    "INSERT INTO goals (id, name, deadline, total_qty, unit, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)
+                    "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
-                     name=excluded.name, deadline=excluded.deadline,
-                     total_qty=excluded.total_qty, unit=excluded.unit",
+                     name=excluded.name, parent_id=excluded.parent_id, deadline=excluded.deadline,
+                     total_qty=excluded.total_qty, unit=excluded.unit, sort_order=excluded.sort_order",
                 )
                 .bind(&id)
                 .bind(&g.name)
+                .bind(&g.parent_id)
+                .bind(&g.path)
                 .bind(&g.deadline)
                 .bind(g.total_qty)
                 .bind(&g.unit)
+                .bind(g.sort_order)
                 .bind(&g.created_at)
                 .execute(&state.0)
                 .await?;
@@ -130,14 +122,17 @@ pub async fn import_data(
             }
             _ => {
                 sqlx::query(
-                    "INSERT INTO goals (id, name, deadline, total_qty, unit, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&id)
                 .bind(&g.name)
+                .bind(&g.parent_id)
+                .bind(&g.path)
                 .bind(&g.deadline)
                 .bind(g.total_qty)
                 .bind(&g.unit)
+                .bind(g.sort_order)
                 .bind(&g.created_at)
                 .execute(&state.0)
                 .await?;
@@ -149,94 +144,12 @@ pub async fn import_data(
         }
     }
 
-    // 导入 stages
-    for s in data.stages {
-        // 关联的 goal_id 可能被 rename
-        let mapped_goal_id = if mode == "rename" {
-            goal_id_map.get(&s.goal_id).cloned().unwrap_or(s.goal_id.clone())
-        } else {
-            s.goal_id.clone()
-        };
-
-        let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM stages WHERE id = ?")
-            .bind(&s.id)
-            .fetch_optional(&state.0)
-            .await?
-            .is_some();
-
-        let (id, action) = match (exists, mode) {
-            (false, _) => (s.id.clone(), "import"),
-            (true, "skip") => (s.id.clone(), "skip"),
-            (true, "overwrite") => (s.id.clone(), "overwrite"),
-            (true, "rename") => {
-                let new_id = uuid::Uuid::new_v4().to_string();
-                stage_id_map.insert(s.id.clone(), new_id.clone());
-                (new_id, "rename")
-            }
-            _ => (s.id.clone(), "skip"),
-        };
-
-        match action {
-            "skip" => {
-                result.stages_skipped += 1;
-                if mode == "rename" {
-                    stage_id_map.insert(s.id.clone(), s.id.clone());
-                }
-            }
-            "overwrite" => {
-                sqlx::query(
-                    "INSERT INTO stages (id, goal_id, name, parent_id, path, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                     ON CONFLICT(id) DO UPDATE SET
-                     name=excluded.name, sort_order=excluded.sort_order",
-                )
-                .bind(&id)
-                .bind(&mapped_goal_id)
-                .bind(&s.name)
-                .bind(&s.parent_id)
-                .bind(&s.path)
-                .bind(s.sort_order)
-                .bind(&s.created_at)
-                .execute(&state.0)
-                .await?;
-                result.stages_imported += 1;
-            }
-            _ => {
-                sqlx::query(
-                    "INSERT INTO stages (id, goal_id, name, parent_id, path, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&id)
-                .bind(&mapped_goal_id)
-                .bind(&s.name)
-                .bind(&s.parent_id)
-                .bind(&s.path)
-                .bind(s.sort_order)
-                .bind(&s.created_at)
-                .execute(&state.0)
-                .await?;
-                result.stages_imported += 1;
-                if mode == "rename" && id != s.id {
-                    stage_id_map.insert(s.id.clone(), id.clone());
-                }
-            }
-        }
-    }
-
-    // 导入 tasks
+    // 导入 tasks（stages 已废弃，跳过）
     for t in data.tasks {
         let mapped_goal_id = if mode == "rename" {
             goal_id_map.get(&t.goal_id).cloned().unwrap_or(t.goal_id.clone())
         } else {
             t.goal_id.clone()
-        };
-        let mapped_stage_id = if mode == "rename" {
-            t.stage_id
-                .as_ref()
-                .and_then(|sid| stage_id_map.get(sid).cloned())
-                .or(t.stage_id.clone())
-        } else {
-            t.stage_id.clone()
         };
 
         let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE id = ?")
@@ -268,7 +181,7 @@ pub async fn import_data(
                 )
                 .bind(&id)
                 .bind(&mapped_goal_id)
-                .bind(&mapped_stage_id)
+                .bind(&t.stage_id)
                 .bind(&t.parent_id)
                 .bind(&t.path)
                 .bind(&t.name)
@@ -293,7 +206,7 @@ pub async fn import_data(
                 )
                 .bind(&id)
                 .bind(&mapped_goal_id)
-                .bind(&mapped_stage_id)
+                .bind(&t.stage_id)
                 .bind(&t.parent_id)
                 .bind(&t.path)
                 .bind(&t.name)
@@ -316,7 +229,6 @@ pub async fn import_data(
     // 导入 encouragements（自定义鼓励语，预设不导入）
     for e in data.encouragements {
         if e.category == "preset" {
-            // 预设鼓励语跳过（已由迁移初始化）
             continue;
         }
         let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM encouragements WHERE id = ?")
@@ -334,13 +246,14 @@ pub async fn import_data(
         };
 
         sqlx::query(
-            "INSERT INTO encouragements (id, text, category, created_at)
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO encouragements (id, text, category, level, created_at)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET text=excluded.text",
         )
         .bind(&id)
         .bind(&e.text)
         .bind(&e.category)
+        .bind(&e.level)
         .bind(&e.created_at)
         .execute(&state.0)
         .await?;

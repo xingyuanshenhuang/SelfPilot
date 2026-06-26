@@ -3,17 +3,52 @@
 export interface Goal {
   id: string;
   name: string;
+  /** 父目标 ID（null=总目标，否则=子目标） */
+  parent_id: string | null;
+  path: string;
   deadline: string | null;
   total_qty: number;
   unit: string;
+  sort_order: number;
   created_at: string;
 }
 
 export interface CreateGoalInput {
   name: string;
+  /** 父目标 ID（不传=总目标） */
+  parent_id?: string | null;
   deadline?: string | null;
   total_qty?: number;
   unit?: string;
+}
+
+export interface UpdateGoalInput {
+  id: string;
+  name?: string;
+  deadline?: string | null;
+  total_qty?: number;
+  unit?: string;
+}
+
+/** 重复拆解输入（纯文字类任务） */
+export interface RepeatSplitInput {
+  goal_id: string;
+  name: string;
+  /** 起始日期 yyyy-MM-dd */
+  start_date: string;
+  /** 结束日期 yyyy-MM-dd（不传或等于 start_date → 单次任务） */
+  end_date?: string | null;
+  plan_qty?: number;
+  unit?: string;
+}
+
+/** 目标树节点 */
+export interface GoalTreeNode {
+  goal: Goal;
+  sub_goals: GoalTreeNode[];
+  tasks: Task[];
+  progress: number;
+  is_completed: boolean;
 }
 
 export interface Task {
@@ -63,6 +98,8 @@ export interface ProgressInfo {
   total_actual: number;
   /** 完成百分比 0.0 ~ 1.0 */
   percentage: number;
+  /** 是否完成（子目标全完成 + 直属子任务全完成） */
+  is_completed: boolean;
 }
 
 export interface TodayTask {

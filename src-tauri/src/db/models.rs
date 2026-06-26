@@ -30,14 +30,18 @@ impl TaskStatus {
     }
 }
 
-/// 目标（一级节点）
+/// 目标（树节点：parent_id=NULL 为总目标，否则为子目标）
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Goal {
     pub id: String,
     pub name: String,
+    /// 父目标 ID（NULL=总目标，否则=子目标）
+    pub parent_id: Option<String>,
+    pub path: String,
     pub deadline: Option<String>,
     pub total_qty: f64,
     pub unit: String,
+    pub sort_order: i64,
     pub created_at: String,
 }
 
@@ -45,9 +49,44 @@ pub struct Goal {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateGoalInput {
     pub name: String,
+    /// 父目标 ID（None=总目标，Some=子目标）
+    pub parent_id: Option<String>,
     pub deadline: Option<String>,
     pub total_qty: Option<f64>,
     pub unit: Option<String>,
+}
+
+/// 更新目标的输入参数
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateGoalInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub deadline: Option<String>,
+    pub total_qty: Option<f64>,
+    pub unit: Option<String>,
+}
+
+/// 重复拆解输入（纯文字类任务：每天重复 or 单次）
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepeatSplitInput {
+    pub goal_id: String,
+    pub name: String,
+    /// 起始日期 yyyy-MM-dd
+    pub start_date: String,
+    /// 结束日期 yyyy-MM-dd（None 或等于 start_date → 单次任务）
+    pub end_date: Option<String>,
+    pub plan_qty: Option<f64>,
+    pub unit: Option<String>,
+}
+
+/// 目标树节点（含子目标和子任务）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalTreeNode {
+    pub goal: Goal,
+    pub sub_goals: Vec<GoalTreeNode>,
+    pub tasks: Vec<Task>,
+    pub progress: f64,
+    pub is_completed: bool,
 }
 
 /// 阶段（二级节点，可选）
@@ -162,6 +201,8 @@ pub struct ProgressInfo {
     pub total_actual: f64,
     /// 完成百分比 0.0 ~ 1.0
     pub percentage: f64,
+    /// 是否完成（子目标全完成 + 直属子任务全完成）
+    pub is_completed: bool,
 }
 
 /// 今日待办任务（带目标名称）

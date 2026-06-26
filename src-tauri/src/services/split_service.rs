@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use uuid::Uuid;
 
-use crate::db::models::{Goal, ReplanPreview, ReplanPreviewItem, Task};
+use crate::db::models::{Goal, ReplanPreview, ReplanPreviewItem, RepeatSplitInput, Task};
 use crate::error::{AppError, AppResult};
 
 /// 自动拆解目标为每日任务
@@ -207,6 +207,79 @@ pub fn build_replan_preview(
         remainder,
         items,
     })
+}
+
+/// 重复拆解任务（纯文字类：每天重复 or 单次）
+///
+/// - end_date=None 或等于 start_date → 生成单个任务
+/// - end_date > start_date → 从 start_date 到 end_date 每天生成一个任务
+/// - 任务的 plan_qty 固定（默认 1），unit 可选（默认空）
+pub fn split_repeat_tasks(
+    goal: &Goal,
+    input: &RepeatSplitInput,
+    _today: NaiveDate,
+) -> AppResult<Vec<Task>> {
+    if input.name.trim().is_empty() {
+        return Err(AppError::Param("任务名称不能为空".into()));
+    }
+
+    let start = NaiveDate::parse_from_str(&input.start_date, "%Y-%m-%d")
+        .map_err(|e| AppError::Param(format!("起始日期格式错误: {}", e)))?;
+
+    let plan_qty = input.plan_qty.unwrap_or(1.0);
+    let unit = input.unit.clone().unwrap_or_default();
+    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    // 判断是否重复
+    let end = match &input.end_date {
+        Some(end_str) => {
+            let end_date = NaiveDate::parse_from_str(end_str, "%Y-%m-%d")
+                .map_err(|e| AppError::Param(format!("结束日期格式错误: {}", e)))?;
+            if end_date < start {
+                return Err(AppError::Param("结束日期不能早于起始日期".into()));
+            }
+            end_date
+        }
+        None => start, // 无结束日期 → 单次
+    };
+
+    let mut tasks = Vec::new();
+    let mut day_index = 0;
+    let mut cursor = start;
+
+    while cursor <= end {
+        day_index += 1;
+        let task_id = Uuid::new_v4().to_string();
+        let path = format!("/{}/{}", goal.id, task_id);
+
+        let name = if start == end {
+            input.name.clone()
+        } else {
+            format!("{} - 第{}天", input.name, day_index)
+        };
+
+        tasks.push(Task {
+            id: task_id,
+            goal_id: goal.id.clone(),
+            stage_id: None,
+            parent_id: Some(goal.id.clone()),
+            path,
+            name,
+            plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
+            plan_qty,
+            actual_qty: 0.0,
+            unit: unit.clone(),
+            status: "pending".to_string(),
+            is_manual: 0,
+            source: "auto".to_string(),
+            sort_order: (day_index - 1) as i64,
+            created_at: now.clone(),
+        });
+
+        cursor += chrono::Duration::days(1);
+    }
+
+    Ok(tasks)
 }
 
 #[cfg(test)]

@@ -42,16 +42,14 @@ pub fn run() {
             // 目标相关
             commands::goal::create_goal,
             commands::goal::list_goals,
+            commands::goal::list_goal_tree,
             commands::goal::get_goal,
+            commands::goal::update_goal,
             commands::goal::delete_goal,
             commands::goal::auto_split,
+            commands::goal::repeat_split,
             commands::goal::replan_preview,
             commands::goal::replan_goal,
-            // 阶段相关
-            commands::stage::create_stage,
-            commands::stage::list_stages,
-            commands::stage::update_stage,
-            commands::stage::delete_stage,
             // 任务相关
             commands::task::create_task,
             commands::task::complete_task,
