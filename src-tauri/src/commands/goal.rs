@@ -106,27 +106,30 @@ pub async fn list_goal_tree(state: State<'_, DbPool>) -> AppResult<Vec<GoalTreeN
         progresses.into_iter().map(|p| (p.id.clone(), p)).collect();
 
     // 5. 递归构建树（从根目标开始）
+    // 注意：必须直接在已排序的 Vec 上 filter，不能收集进 HashMap
+    // （Rust HashMap 不保证迭代顺序，会导致子目标顺序随机抖动）
     let roots: Vec<Goal> = all_goals.iter().filter(|g| g.parent_id.is_none()).cloned().collect();
-    let all_goals_map: HashMap<String, Goal> =
-        all_goals.into_iter().map(|g| (g.id.clone(), g)).collect();
 
-    let tree = build_tree_nodes(&roots, &all_goals_map, &tasks_by_goal, &progress_map);
+    let tree = build_tree_nodes(&roots, &all_goals, &tasks_by_goal, &progress_map);
     Ok(tree)
 }
 
 /// 递归构建目标树节点
+///
+/// `all_goals` 必须保留 SQL `ORDER BY sort_order, created_at` 的排序，
+/// 在其上 filter 出子目标可保证子目标顺序稳定。
 fn build_tree_nodes(
     goals: &[Goal],
-    all_goals: &HashMap<String, Goal>,
+    all_goals: &[Goal],
     tasks_by_goal: &HashMap<String, Vec<Task>>,
     progress_map: &HashMap<String, ProgressInfo>,
 ) -> Vec<GoalTreeNode> {
     goals
         .iter()
         .map(|goal| {
-            // 找到子目标
+            // 找到子目标（保留 all_goals 的排序）
             let sub_goals: Vec<Goal> = all_goals
-                .values()
+                .iter()
                 .filter(|g| g.parent_id.as_deref() == Some(&goal.id))
                 .cloned()
                 .collect();

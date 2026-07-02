@@ -59,6 +59,8 @@ export interface Task {
   path: string;
   name: string;
   plan_date: string | null;
+  /** 精确逾期日期（yyyy-MM-dd），逾期任务才有值 */
+  overdue_date: string | null;
   plan_qty: number;
   actual_qty: number;
   unit: string;
@@ -109,6 +111,8 @@ export interface TodayTask {
   stage_id: string | null;
   name: string;
   plan_date: string | null;
+  /** 精确逾期日期（yyyy-MM-dd），逾期任务才有值 */
+  overdue_date: string | null;
   plan_qty: number;
   actual_qty: number;
   unit: string;
@@ -120,7 +124,10 @@ export type TaskStatus = "pending" | "partial" | "done" | "skipped";
 
 export interface MoveTaskInput {
   task_id: string;
-  stage_id: string | null;
+  /** 跨目标移动时指定新目标 ID（拖拽归属） */
+  goal_id?: string;
+  /** 阶段内移动时指定新阶段 ID */
+  stage_id?: string | null;
 }
 
 /** 重新规划预览项 */

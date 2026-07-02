@@ -157,6 +157,8 @@ pub struct Task {
     pub path: String,
     pub name: String,
     pub plan_date: Option<String>,
+    /// 精确逾期日期（yyyy-MM-dd），逾期任务首次被检测时写入
+    pub overdue_date: Option<String>,
     pub plan_qty: f64,
     pub actual_qty: f64,
     pub unit: String,
@@ -220,6 +222,8 @@ pub struct TodayTask {
     pub stage_id: Option<String>,
     pub name: String,
     pub plan_date: Option<String>,
+    /// 精确逾期日期（yyyy-MM-dd），仅逾期任务有值
+    pub overdue_date: Option<String>,
     pub plan_qty: f64,
     pub actual_qty: f64,
     pub unit: String,
@@ -262,10 +266,16 @@ pub struct ReplanResult {
     pub tasks: Vec<Task>,
 }
 
-/// 移动任务到阶段
+/// 移动任务（支持跨目标归属调整与阶段移动）
+///
+/// - 仅提供 `goal_id`：跨目标移动任务（拖拽归属）
+/// - 仅提供 `stage_id`：阶段内移动
+/// - 同时提供：以 goal_id 为准，stage_id 一并更新
+/// - 均不提供：错误
 #[derive(Debug, Clone, Deserialize)]
 pub struct MoveTaskInput {
     pub task_id: String,
+    pub goal_id: Option<String>,
     pub stage_id: Option<String>,
 }
 

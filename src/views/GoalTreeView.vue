@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, reactive, h } from "vue";
+import { onMounted, ref, reactive, h, provide } from "vue";
 import {
-  NCard,
   NButton,
   NSpace,
   NInput,
@@ -12,11 +11,7 @@ import {
   NFormItem,
   NModal,
   NEmpty,
-  NTag,
-  NPopconfirm,
   NDataTable,
-  NProgress,
-  NDropdown,
   NCheckbox,
   useMessage,
   useDialog,
@@ -36,8 +31,11 @@ import type {
   UpdateGoalInput,
   RepeatSplitInput,
 } from "@/types";
-import { STATUS_META } from "@/types";
 import { format, parseISO, differenceInCalendarDays } from "date-fns";
+import GoalTreeNodeItem, {
+  goalTreeApiKey,
+  type GoalTreeApi,
+} from "@/components/GoalTreeNodeItem.vue";
 
 const goalStore = useGoalStore();
 const message = useMessage();
@@ -56,28 +54,32 @@ const goalForm = reactive({
 });
 
 const unitOptions = [
+  // 数量类
   { label: "个", value: "个" },
-  { label: "页", value: "页" },
-  { label: "小时", value: "小时" },
-  { label: "道", value: "道" },
+  { label: "次", value: "次" },
+  // 无
   { label: "无", value: "" },
+  // 时间类
+  { label: "分钟", value: "分钟" },
+  { label: "小时", value: "小时" },
+  // 学习内容类
+  { label: "页", value: "页" },
+  { label: "章", value: "章" },
+  { label: "节", value: "节" },
+  { label: "篇", value: "篇" },
+  { label: "本", value: "本" },
+  { label: "集", value: "集" },
+  { label: "讲", value: "讲" },
+  // 题目类
+  { label: "道", value: "道" },
+  { label: "题", value: "题" },
+  // 词汇类
+  { label: "词", value: "词" },
+  { label: "字", value: "字" },
 ];
 
 // ===== 展开状态 =====
 const expandedNodes = ref<Set<string>>(new Set());
-
-// ===== 重复拆解弹窗 =====
-const showRepeatSplit = ref(false);
-const repeatForm = reactive({
-  goal_id: "",
-  goal_name: "",
-  name: "",
-  start_date: Date.now() as number | null,
-  end_date: null as number | null,
-  is_repeat: false,
-  plan_qty: 1,
-  unit: "",
-});
 
 // ===== 任务创建/编辑弹窗 =====
 const showTaskModal = ref(false);
@@ -87,6 +89,8 @@ const taskForm = reactive({
   goal_id: "",
   name: "",
   plan_date: null as number | null,
+  is_repeat: false,
+  end_date: null as number | null,
   plan_qty: 1,
   unit: "个",
 });
@@ -211,59 +215,6 @@ async function handleAutoSplit(goal: Goal) {
   }
 }
 
-// ===== 重复拆解（纯文字类）=====
-function openRepeatSplitModal(goal: Goal) {
-  repeatForm.goal_id = goal.id;
-  repeatForm.goal_name = goal.name;
-  repeatForm.name = "";
-  repeatForm.start_date = Date.now();
-  repeatForm.end_date = null;
-  repeatForm.is_repeat = false;
-  repeatForm.plan_qty = 1;
-  repeatForm.unit = "";
-  showRepeatSplit.value = true;
-}
-
-async function handleRepeatSplit() {
-  if (!repeatForm.name.trim()) {
-    message.warning("请输入任务名称");
-    return;
-  }
-  if (!repeatForm.start_date) {
-    message.warning("请选择起始日期");
-    return;
-  }
-  const start_date = format(new Date(repeatForm.start_date), "yyyy-MM-dd");
-  const end_date =
-    repeatForm.is_repeat && repeatForm.end_date
-      ? format(new Date(repeatForm.end_date), "yyyy-MM-dd")
-      : null;
-
-  if (repeatForm.is_repeat && !repeatForm.end_date) {
-    message.warning("重复任务请选择结束日期");
-    return;
-  }
-
-  try {
-    const input: RepeatSplitInput = {
-      goal_id: repeatForm.goal_id,
-      name: repeatForm.name,
-      start_date,
-      end_date,
-      plan_qty: repeatForm.plan_qty,
-      unit: repeatForm.unit,
-    };
-    const tasks = await goalApi.repeatSplit(input);
-    message.success(`已生成 ${tasks.length} 个任务`);
-    showRepeatSplit.value = false;
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
-    expandedNodes.value.add(repeatForm.goal_id);
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
 // ===== 任务创建 =====
 function openCreateTaskModal(goalId: string) {
   taskModalMode.value = "create";
@@ -271,6 +222,8 @@ function openCreateTaskModal(goalId: string) {
   taskForm.goal_id = goalId;
   taskForm.name = "";
   taskForm.plan_date = Date.now();
+  taskForm.is_repeat = false;
+  taskForm.end_date = null;
   taskForm.plan_qty = 1;
   taskForm.unit = "个";
   showTaskModal.value = true;
@@ -281,21 +234,50 @@ async function handleSaveTask() {
     message.warning("请输入任务名称");
     return;
   }
-  const plan_date = taskForm.plan_date
-    ? format(new Date(taskForm.plan_date), "yyyy-MM-dd")
-    : null;
   try {
     if (taskModalMode.value === "create") {
-      const input: CreateTaskInput = {
-        goal_id: taskForm.goal_id,
-        name: taskForm.name,
-        plan_date,
-        plan_qty: taskForm.plan_qty,
-        unit: taskForm.unit,
-      };
-      await taskApi.createTask(input);
-      message.success("任务创建成功");
+      if (taskForm.is_repeat) {
+        // 重复任务：按日期范围每天生成一个任务
+        if (!taskForm.plan_date) {
+          message.warning("请选择起始日期");
+          return;
+        }
+        if (!taskForm.end_date) {
+          message.warning("重复任务请选择结束日期");
+          return;
+        }
+        const start_date = format(new Date(taskForm.plan_date), "yyyy-MM-dd");
+        const end_date = format(new Date(taskForm.end_date), "yyyy-MM-dd");
+        const input: RepeatSplitInput = {
+          goal_id: taskForm.goal_id,
+          name: taskForm.name,
+          start_date,
+          end_date,
+          plan_qty: taskForm.plan_qty,
+          unit: taskForm.unit,
+        };
+        const tasks = await goalApi.repeatSplit(input);
+        message.success(`已生成 ${tasks.length} 个任务`);
+        expandedNodes.value.add(taskForm.goal_id);
+      } else {
+        // 单次任务
+        const plan_date = taskForm.plan_date
+          ? format(new Date(taskForm.plan_date), "yyyy-MM-dd")
+          : null;
+        const input: CreateTaskInput = {
+          goal_id: taskForm.goal_id,
+          name: taskForm.name,
+          plan_date,
+          plan_qty: taskForm.plan_qty,
+          unit: taskForm.unit,
+        };
+        await taskApi.createTask(input);
+        message.success("任务创建成功");
+      }
     } else {
+      const plan_date = taskForm.plan_date
+        ? format(new Date(taskForm.plan_date), "yyyy-MM-dd")
+        : null;
       const input: UpdateTaskInput = {
         task_id: taskForm.task_id,
         name: taskForm.name,
@@ -377,10 +359,45 @@ async function handleConfirmBackfill() {
   }
 }
 
+/** 在已加载的目标树中查找某目标下的全部任务 */
+function findTasksByGoalId(goalId: string): Task[] {
+  for (const rootNode of goalStore.goalTree) {
+    if (rootNode.goal.id === goalId) return rootNode.tasks;
+    for (const subNode of rootNode.sub_goals) {
+      if (subNode.goal.id === goalId) return subNode.tasks;
+    }
+  }
+  return [];
+}
+
+/**
+ * 获取与指定任务同批生成的关联任务。
+ * 自动拆解/重复任务由后端一次性生成，共享 source='auto' 与相同的 created_at。
+ * 返回长度 > 1 表示该任务属于一个批量（自动拆解或重复任务批次）。
+ */
+function getBatchTasks(task: Task): Task[] {
+  if (task.source !== "auto") return [task];
+  return findTasksByGoalId(task.goal_id).filter(
+    (t) => t.source === "auto" && t.created_at === task.created_at,
+  );
+}
+
 async function handleDeleteTask(task: Task) {
   try {
     await taskApi.deleteTask(task.id);
     message.success("任务已删除");
+    await goalStore.fetchGoalTree();
+    await goalStore.fetchProgresses();
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+/** 批量删除同批生成的关联任务 */
+async function handleDeleteBatch(tasks: Task[]) {
+  try {
+    await Promise.all(tasks.map((t) => taskApi.deleteTask(t.id)));
+    message.success(`已删除 ${tasks.length} 个关联任务`);
     await goalStore.fetchGoalTree();
     await goalStore.fetchProgresses();
   } catch (e) {
@@ -484,17 +501,70 @@ function handleTaskAction(key: string, task: Task) {
     case "edit":
       openEditTaskModal(task);
       break;
-    case "delete":
-      dialog.warning({
-        title: "删除任务",
-        content: `确定删除任务"${task.name}"？此操作不可撤销。`,
-        positiveText: "删除",
-        negativeText: "取消",
-        onPositiveClick: () => handleDeleteTask(task),
-      });
+    case "delete": {
+      const batch = getBatchTasks(task);
+      if (batch.length > 1) {
+        // 自动拆解/重复任务批次：可选择仅删当前或删除全部关联
+        dialog.warning({
+          title: "删除任务",
+          content: `该任务由自动拆解/重复任务生成，共 ${batch.length} 个关联任务。"删除全部关联"将一并删除这 ${batch.length} 个任务。操作不可撤销。`,
+          positiveText: "仅删除当前",
+          negativeText: `删除全部关联 (${batch.length})`,
+          onPositiveClick: () => handleDeleteTask(task),
+          onNegativeClick: () => handleDeleteBatch(batch),
+        });
+      } else {
+        dialog.warning({
+          title: "删除任务",
+          content: `确定删除任务"${task.name}"？此操作不可撤销。`,
+          positiveText: "删除",
+          negativeText: "取消",
+          onPositiveClick: () => handleDeleteTask(task),
+        });
+      }
       break;
+    }
   }
 }
+
+// ===== 拖拽归属：共享状态 + 跨目标移动 =====
+const draggingTaskId = ref<string | null>(null);
+const dragOverGoalId = ref<string | null>(null);
+
+async function handleMoveTask(task: Task, targetGoalId: string) {
+  try {
+    await taskApi.moveTask({
+      task_id: task.id,
+      goal_id: targetGoalId,
+    });
+    message.success(`已将任务"${task.name}"移动到新目标`);
+    await goalStore.fetchGoalTree();
+    await goalStore.fetchProgresses();
+    // 自动展开目标节点，便于用户立刻看到移动结果
+    expandedNodes.value.add(targetGoalId);
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+// ===== 向递归子组件注入树 API（避免逐层 prop 透传）=====
+const treeApi: GoalTreeApi = {
+  expandedNodes,
+  toggleNode,
+  getDaysLeft,
+  openCreateGoalModal,
+  openCreateTaskModal,
+  openEditGoalModal,
+  handleAutoSplit,
+  handleReplanPreview,
+  handleDeleteGoal,
+  buildTaskActions,
+  handleTaskAction,
+  handleMoveTask,
+  draggingTaskId,
+  dragOverGoalId,
+};
+provide(goalTreeApiKey, treeApi);
 </script>
 
 <template>
@@ -515,358 +585,17 @@ function handleTaskAction(key: string, task: Task) {
       class="text-xs text-gray-400 flex items-center gap-1 bg-gray-50 px-3 py-1.5 rounded"
     >
       <Icon icon="mdi:information-outline" width="14" />
-      总目标下可添加子目标和子任务；完成所有子目标+子任务即完成总目标
+      支持任意层级嵌套子目标；任务行可拖拽到其他目标下调整归属
     </div>
 
     <!-- 目标树 -->
     <div v-if="goalStore.goalTree.length > 0" class="space-y-2">
-      <NCard
+      <GoalTreeNodeItem
         v-for="rootNode in goalStore.goalTree"
         :key="rootNode.goal.id"
-        size="small"
-      >
-        <!-- 总目标头部 -->
-        <div
-          class="flex items-center gap-3 cursor-pointer"
-          @click="toggleNode(rootNode.goal.id)"
-        >
-          <Icon
-            :icon="
-              expandedNodes.has(rootNode.goal.id)
-                ? 'mdi:chevron-down'
-                : 'mdi:chevron-right'
-            "
-            width="20"
-            class="text-gray-400"
-          />
-          <Icon
-            :icon="rootNode.is_completed ? 'mdi:check-circle' : 'mdi:target'"
-            width="20"
-            :class="rootNode.is_completed ? 'text-green-500' : 'text-brand-500'"
-          />
-          <div class="flex-1">
-            <div
-              class="font-medium"
-              :class="{ 'line-through text-gray-400': rootNode.is_completed }"
-            >
-              {{ rootNode.goal.name }}
-            </div>
-            <div class="text-xs text-gray-500 flex items-center gap-3 mt-0.5">
-              <span
-                :class="{
-                  'text-red-500': getDaysLeft(rootNode.goal.deadline).includes(
-                    '逾期',
-                  ),
-                }"
-              >
-                {{ getDaysLeft(rootNode.goal.deadline) }}
-              </span>
-              <span v-if="rootNode.goal.total_qty > 0">
-                总量：{{ rootNode.goal.total_qty }}{{ rootNode.goal.unit }}
-              </span>
-              <span> 进度：{{ Math.round(rootNode.progress * 100) }}% </span>
-              <NTag
-                v-if="rootNode.is_completed"
-                size="tiny"
-                type="success"
-                :bordered="false"
-              >
-                已完成
-              </NTag>
-            </div>
-          </div>
-          <NSpace :size="4" @click.stop>
-            <NButton
-              size="tiny"
-              quaternary
-              type="info"
-              @click="openCreateGoalModal(rootNode.goal.id)"
-            >
-              <template #icon><Icon icon="mdi:folder-plus-outline" /></template>
-              子目标
-            </NButton>
-            <NButton
-              size="tiny"
-              type="primary"
-              ghost
-              :disabled="
-                !rootNode.goal.deadline || rootNode.goal.total_qty <= 0
-              "
-              @click="handleAutoSplit(rootNode.goal)"
-            >
-              <template #icon><Icon icon="mdi:auto-fix" /></template>
-              视频拆解
-            </NButton>
-            <NButton
-              size="tiny"
-              type="success"
-              ghost
-              @click="openRepeatSplitModal(rootNode.goal)"
-            >
-              <template #icon><Icon icon="mdi:repeat" /></template>
-              重复任务
-            </NButton>
-            <NButton
-              size="tiny"
-              type="warning"
-              ghost
-              :disabled="!rootNode.goal.deadline"
-              @click="handleReplanPreview(rootNode.goal)"
-            >
-              <template #icon><Icon icon="mdi:refresh-circle" /></template>
-              重新规划
-            </NButton>
-            <NButton
-              size="tiny"
-              quaternary
-              type="info"
-              @click="openCreateTaskModal(rootNode.goal.id)"
-            >
-              <template #icon><Icon icon="mdi:plus-box-outline" /></template>
-              任务
-            </NButton>
-            <NButton
-              size="tiny"
-              quaternary
-              @click="openEditGoalModal(rootNode.goal)"
-            >
-              <Icon icon="mdi:pencil-outline" />
-            </NButton>
-            <NPopconfirm @positive-click="handleDeleteGoal(rootNode.goal)">
-              <template #trigger>
-                <NButton size="tiny" quaternary type="error">
-                  <Icon icon="mdi:delete" />
-                </NButton>
-              </template>
-              确定删除总目标"{{
-                rootNode.goal.name
-              }}"？所有子目标和任务将一并删除。
-            </NPopconfirm>
-          </NSpace>
-        </div>
-
-        <!-- 总目标展开内容 -->
-        <div
-          v-if="expandedNodes.has(rootNode.goal.id)"
-          class="mt-3 ml-8 space-y-2"
-        >
-          <!-- 子目标列表 -->
-          <NCard
-            v-for="subNode in rootNode.sub_goals"
-            :key="subNode.goal.id"
-            size="small"
-            :bordered="true"
-          >
-            <!-- 子目标头部 -->
-            <div
-              class="flex items-center gap-2 cursor-pointer"
-              @click="toggleNode(subNode.goal.id)"
-            >
-              <Icon
-                :icon="
-                  expandedNodes.has(subNode.goal.id)
-                    ? 'mdi:chevron-down'
-                    : 'mdi:chevron-right'
-                "
-                width="16"
-                class="text-gray-400"
-              />
-              <Icon
-                :icon="
-                  subNode.is_completed
-                    ? 'mdi:check-circle'
-                    : 'mdi:target-variant'
-                "
-                width="16"
-                :class="
-                  subNode.is_completed ? 'text-green-500' : 'text-blue-500'
-                "
-              />
-              <span
-                class="flex-1 text-sm font-medium"
-                :class="{ 'line-through text-gray-400': subNode.is_completed }"
-              >
-                {{ subNode.goal.name }}
-              </span>
-              <NProgress
-                type="line"
-                :percentage="Math.round(subNode.progress * 100)"
-                :show-indicator="false"
-                :height="4"
-                style="width: 80px"
-              />
-              <span class="text-xs text-gray-500">
-                {{ Math.round(subNode.progress * 100) }}%
-              </span>
-              <NTag
-                v-if="subNode.is_completed"
-                size="tiny"
-                type="success"
-                :bordered="false"
-              >
-                完成
-              </NTag>
-              <NSpace :size="2" @click.stop>
-                <NButton
-                  size="tiny"
-                  quaternary
-                  type="primary"
-                  ghost
-                  :disabled="
-                    !subNode.goal.deadline || subNode.goal.total_qty <= 0
-                  "
-                  @click="handleAutoSplit(subNode.goal)"
-                >
-                  <Icon icon="mdi:auto-fix" width="14" />
-                </NButton>
-                <NButton
-                  size="tiny"
-                  quaternary
-                  type="success"
-                  @click="openRepeatSplitModal(subNode.goal)"
-                >
-                  <Icon icon="mdi:repeat" width="14" />
-                </NButton>
-                <NButton
-                  size="tiny"
-                  quaternary
-                  type="info"
-                  @click="openCreateTaskModal(subNode.goal.id)"
-                >
-                  <Icon icon="mdi:plus" width="14" />
-                </NButton>
-                <NButton
-                  size="tiny"
-                  quaternary
-                  @click="openEditGoalModal(subNode.goal)"
-                >
-                  <Icon icon="mdi:pencil-outline" width="14" />
-                </NButton>
-                <NPopconfirm @positive-click="handleDeleteGoal(subNode.goal)">
-                  <template #trigger>
-                    <NButton size="tiny" quaternary type="error">
-                      <Icon icon="mdi:close" width="14" />
-                    </NButton>
-                  </template>
-                  确定删除子目标"{{ subNode.goal.name }}"？
-                </NPopconfirm>
-              </NSpace>
-            </div>
-
-            <!-- 子目标下的任务 -->
-            <div
-              v-if="expandedNodes.has(subNode.goal.id)"
-              class="ml-6 mt-1 space-y-0.5"
-            >
-              <div
-                v-for="task in subNode.tasks"
-                :key="task.id"
-                class="flex items-center gap-2 px-3 py-1 rounded hover:bg-gray-50 text-sm"
-              >
-                <Icon
-                  :icon="STATUS_META[task.status].icon"
-                  :color="STATUS_META[task.status].color"
-                  width="14"
-                />
-                <span
-                  class="flex-1 truncate"
-                  :class="{
-                    'line-through text-gray-400': task.status === 'done',
-                  }"
-                >
-                  {{ task.name }}
-                </span>
-                <span class="text-xs text-gray-500">{{ task.plan_date }}</span>
-                <span class="text-xs text-gray-500">
-                  {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
-                </span>
-                <NTag
-                  v-if="task.source === 'manual'"
-                  size="tiny"
-                  :bordered="false"
-                  type="warning"
-                >
-                  手动
-                </NTag>
-                <NDropdown
-                  trigger="click"
-                  :options="buildTaskActions(task)"
-                  @select="(key: string) => handleTaskAction(key, task)"
-                >
-                  <NButton size="tiny" quaternary>
-                    <Icon icon="mdi:dots-horizontal" width="16" />
-                  </NButton>
-                </NDropdown>
-              </div>
-              <div
-                v-if="subNode.tasks.length === 0"
-                class="text-xs text-gray-400 py-1 px-3"
-              >
-                暂无任务
-              </div>
-            </div>
-          </NCard>
-
-          <!-- 总目标直属任务 -->
-          <div v-if="rootNode.tasks.length > 0" class="space-y-0.5">
-            <div
-              v-if="rootNode.sub_goals.length > 0"
-              class="text-xs text-gray-400 px-3 py-1"
-            >
-              直属任务
-            </div>
-            <div
-              v-for="task in rootNode.tasks"
-              :key="task.id"
-              class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 text-sm"
-            >
-              <Icon
-                :icon="STATUS_META[task.status].icon"
-                :color="STATUS_META[task.status].color"
-                width="16"
-              />
-              <span
-                class="flex-1 truncate"
-                :class="{
-                  'line-through text-gray-400': task.status === 'done',
-                }"
-              >
-                {{ task.name }}
-              </span>
-              <span class="text-xs text-gray-500">{{ task.plan_date }}</span>
-              <NTag
-                size="tiny"
-                :bordered="false"
-                :type="task.source === 'auto' ? 'info' : 'warning'"
-              >
-                {{ task.source === "auto" ? "自动" : "手动" }}
-              </NTag>
-              <span class="text-xs text-gray-500">
-                {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
-              </span>
-              <NDropdown
-                trigger="click"
-                :options="buildTaskActions(task)"
-                @select="(key: string) => handleTaskAction(key, task)"
-              >
-                <NButton size="tiny" quaternary>
-                  <Icon icon="mdi:dots-horizontal" width="16" />
-                </NButton>
-              </NDropdown>
-            </div>
-          </div>
-
-          <!-- 空状态 -->
-          <div
-            v-if="
-              rootNode.sub_goals.length === 0 && rootNode.tasks.length === 0
-            "
-            class="text-sm text-gray-400 py-2"
-          >
-            暂无子目标和任务，点击上方按钮开始添加
-          </div>
-        </div>
-      </NCard>
+        :node="rootNode"
+        :level="0"
+      />
     </div>
 
     <NEmpty v-else description="还没有目标，点击右上角创建第一个总目标吧" />
@@ -922,30 +651,26 @@ function handleTaskAction(key: string, task: Task) {
       </template>
     </NModal>
 
-    <!-- 重复拆解弹窗 -->
+    <!-- 创建/编辑任务弹窗（含重复任务） -->
     <NModal
-      v-model:show="showRepeatSplit"
+      v-model:show="showTaskModal"
       preset="card"
-      title="添加重复任务"
+      :title="taskModalMode === 'create' ? '添加任务' : '编辑任务'"
       style="width: 500px"
     >
       <div class="space-y-3">
-        <div class="text-sm text-gray-600">
-          目标：<strong>{{ repeatForm.goal_name }}</strong>
-        </div>
-        <NFormItem label="任务名称" :show-feedback="false">
+        <NFormItem label="任务名称" :show-feedback="false" required>
           <NInput
-            v-model:value="repeatForm.name"
+            v-model:value="taskForm.name"
             placeholder="如：完成 Vue 练习题"
           />
         </NFormItem>
-        <div class="flex items-center gap-2">
-          <NCheckbox v-model:checked="repeatForm.is_repeat">
-            每天重复
-          </NCheckbox>
+        <!-- 重复开关（仅创建模式显示） -->
+        <div v-if="taskModalMode === 'create'" class="flex items-center gap-2">
+          <NCheckbox v-model:checked="taskForm.is_repeat"> 每天重复 </NCheckbox>
           <span class="text-xs text-gray-400">
             {{
-              repeatForm.is_repeat
+              taskForm.is_repeat
                 ? "在日期范围内每天生成一个任务"
                 : "只生成一个单次任务"
             }}
@@ -953,18 +678,22 @@ function handleTaskAction(key: string, task: Task) {
         </div>
         <NSpace>
           <NFormItem
-            :label="repeatForm.is_repeat ? '起始日期' : '完成日期'"
+            :label="taskForm.is_repeat ? '起始日期' : '计划日期'"
             :show-feedback="false"
           >
-            <NDatePicker v-model:value="repeatForm.start_date" type="date" />
+            <NDatePicker
+              v-model:value="taskForm.plan_date"
+              type="date"
+              clearable
+            />
           </NFormItem>
           <NFormItem
-            v-if="repeatForm.is_repeat"
+            v-if="taskForm.is_repeat && taskModalMode === 'create'"
             label="结束日期"
             :show-feedback="false"
           >
             <NDatePicker
-              v-model:value="repeatForm.end_date"
+              v-model:value="taskForm.end_date"
               type="date"
               clearable
             />
@@ -972,55 +701,9 @@ function handleTaskAction(key: string, task: Task) {
         </NSpace>
         <NSpace>
           <NFormItem label="计划数量" :show-feedback="false">
-            <NInputNumber v-model:value="repeatForm.plan_qty" :min="1" />
-          </NFormItem>
-          <NFormItem label="单位" :show-feedback="false">
-            <NSelect
-              v-model:value="repeatForm.unit"
-              :options="unitOptions"
-              style="width: 100px"
-            />
-          </NFormItem>
-        </NSpace>
-        <div class="text-xs text-blue-500 bg-blue-50 px-3 py-2 rounded">
-          <Icon icon="mdi:information" class="inline-block mr-1" />
-          纯文字类任务（如练习题）可设置每天重复；视频类任务请使用"视频拆解"
-        </div>
-      </div>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showRepeatSplit = false">取消</NButton>
-          <NButton type="primary" @click="handleRepeatSplit">生成任务</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <!-- 创建/编辑任务弹窗 -->
-    <NModal
-      v-model:show="showTaskModal"
-      preset="card"
-      :title="taskModalMode === 'create' ? '添加任务' : '编辑任务'"
-      style="width: 480px"
-    >
-      <NForm label-placement="top">
-        <NFormItem label="任务名称" required>
-          <NInput
-            v-model:value="taskForm.name"
-            placeholder="如：背诵第1单元单词"
-          />
-        </NFormItem>
-        <NFormItem label="计划日期">
-          <NDatePicker
-            v-model:value="taskForm.plan_date"
-            type="date"
-            clearable
-          />
-        </NFormItem>
-        <NSpace>
-          <NFormItem label="计划数量">
             <NInputNumber v-model:value="taskForm.plan_qty" :min="0" />
           </NFormItem>
-          <NFormItem label="单位">
+          <NFormItem label="单位" :show-feedback="false">
             <NSelect
               v-model:value="taskForm.unit"
               :options="unitOptions"
@@ -1029,7 +712,14 @@ function handleTaskAction(key: string, task: Task) {
             />
           </NFormItem>
         </NSpace>
-      </NForm>
+        <div
+          v-if="taskModalMode === 'create'"
+          class="text-xs text-blue-500 bg-blue-50 px-3 py-2 rounded"
+        >
+          <Icon icon="mdi:information" class="inline-block mr-1" />
+          纯文字类任务（如练习题）可勾选"每天重复"在日期范围内每天生成；视频类任务请使用"视频拆解"
+        </div>
+      </div>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showTaskModal = false">取消</NButton>

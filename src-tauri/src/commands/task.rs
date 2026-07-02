@@ -1,7 +1,7 @@
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::models::{CalendarTask, CompleteTaskInput, CreateTaskInput, MoveTaskInput, Task, TodayTask, UpdateTaskInput};
+use crate::db::models::{CalendarTask, CompleteTaskInput, CreateTaskInput, Goal, MoveTaskInput, Task, TodayTask, UpdateTaskInput};
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 
@@ -134,7 +134,7 @@ pub async fn list_today_tasks(state: State<'_, DbPool>) -> AppResult<Vec<TodayTa
 
     let tasks: Vec<TodayTask> = sqlx::query_as(
         "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
-                t.plan_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
+                t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
          FROM tasks t
          JOIN goals g ON t.goal_id = g.id
          WHERE t.plan_date = ? AND t.status != 'skipped'
@@ -148,21 +148,40 @@ pub async fn list_today_tasks(state: State<'_, DbPool>) -> AppResult<Vec<TodayTa
 }
 
 /// 列出逾期未完成任务（截止日期早于今日且未完成）
+///
+/// 数据校验与写入：
+/// - 逾期任务的 overdue_date 以 plan_date 为准
+/// - 首次查询到逾期且 overdue_date 为空时，自动补写入库
+/// - 若已存储的 overdue_date 与 plan_date 不一致，自动修正
 #[tauri::command]
 pub async fn list_overdue_tasks(state: State<'_, DbPool>) -> AppResult<Vec<TodayTask>> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let tasks: Vec<TodayTask> = sqlx::query_as(
+    let mut tasks: Vec<TodayTask> = sqlx::query_as(
         "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
-                t.plan_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
+                t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
          FROM tasks t
          JOIN goals g ON t.goal_id = g.id
          WHERE t.plan_date < ? AND t.status IN ('pending', 'partial')
-         ORDER BY t.plan_date",
+         ORDER BY COALESCE(t.overdue_date, t.plan_date), t.plan_date",
     )
     .bind(&today)
     .fetch_all(&state.0)
     .await?;
+
+    for task in &mut tasks {
+        if let Some(plan_date) = &task.plan_date {
+            let expected = Some(plan_date.clone());
+            if task.overdue_date != expected {
+                sqlx::query("UPDATE tasks SET overdue_date = ? WHERE id = ?")
+                    .bind(plan_date)
+                    .bind(&task.id)
+                    .execute(&state.0)
+                    .await?;
+                task.overdue_date = expected;
+            }
+        }
+    }
 
     Ok(tasks)
 }
@@ -238,7 +257,11 @@ pub async fn backfill_task(
     Ok(updated)
 }
 
-/// 移动任务到指定阶段（或移出阶段）
+/// 移动任务（支持跨目标归属调整与阶段移动）
+///
+/// - `goal_id=Some` → 跨目标移动（拖拽归属）：更新 goal_id、parent_id、path，清空 stage_id
+/// - `goal_id=None & stage_id=Some` → 阶段内移动：仅更新 stage_id、path
+/// - 校验：目标 goal 必须存在；新 goal_id 不能与当前相同（避免无意义写入）
 #[tauri::command]
 pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppResult<Task> {
     let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
@@ -247,18 +270,57 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
         .await?
         .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
 
-    // 更新 stage_id 和 path
-    let new_path = match &input.stage_id {
-        Some(stage_id) => format!("/{}/{}/{}", task.goal_id, stage_id, input.task_id),
-        None => format!("/{}/{}", task.goal_id, input.task_id),
+    let new_goal_id = match &input.goal_id {
+        Some(gid) => {
+            // 校验目标存在
+            let _goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+                .bind(gid)
+                .fetch_optional(&state.0)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", gid)))?;
+            // 避免无意义同目标移动
+            if gid == &task.goal_id {
+                return Err(AppError::Business("任务已在该目标下，无需移动".into()));
+            }
+            gid.clone()
+        }
+        None => task.goal_id.clone(),
     };
 
-    sqlx::query("UPDATE tasks SET stage_id = ?, path = ? WHERE id = ?")
-        .bind(&input.stage_id)
+    // 计算新 stage_id：跨目标移动时清空（旧 stage 属于旧 goal），否则按入参
+    let new_stage_id: Option<String> = if input.goal_id.is_some() {
+        None
+    } else {
+        input.stage_id.clone()
+    };
+
+    // 计算新 path：始终基于新 goal_id 重建
+    let new_path = match &new_stage_id {
+        Some(stage_id) => format!("/{}/{}/{}", new_goal_id, stage_id, input.task_id),
+        None => format!("/{}/{}", new_goal_id, input.task_id),
+    };
+
+    if input.goal_id.is_some() {
+        // 跨目标移动：更新 goal_id、parent_id（指向新 goal）、stage_id、path
+        sqlx::query(
+            "UPDATE tasks SET goal_id = ?, parent_id = ?, stage_id = ?, path = ? WHERE id = ?",
+        )
+        .bind(&new_goal_id)
+        .bind(&new_goal_id)
+        .bind(None::<String>)
         .bind(&new_path)
         .bind(&input.task_id)
         .execute(&state.0)
         .await?;
+    } else {
+        // 阶段内移动：仅更新 stage_id、path
+        sqlx::query("UPDATE tasks SET stage_id = ?, path = ? WHERE id = ?")
+            .bind(&new_stage_id)
+            .bind(&new_path)
+            .bind(&input.task_id)
+            .execute(&state.0)
+            .await?;
+    }
 
     let updated: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&input.task_id)
@@ -320,8 +382,9 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
     }
 
     if let Some(plan_date) = &input.plan_date {
-        // 允许空字符串表示清除日期
+        // 允许空字符串表示清除日期；计划日期变更后，逾期日期需重新计算
         updates.push("plan_date = ?".to_string());
+        updates.push("overdue_date = NULL".to_string());
         let _ = plan_date; // 绑定在下方动态处理
     }
 

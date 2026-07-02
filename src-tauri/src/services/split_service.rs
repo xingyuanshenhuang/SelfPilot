@@ -61,6 +61,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
             path,
             name: format!("{} - 第{}天", goal.name, day_index),
             plan_date: Some(task_date.format("%Y-%m-%d").to_string()),
+            overdue_date: None,
             plan_qty,
             actual_qty: 0.0,
             unit: goal.unit.clone(),
@@ -266,6 +267,7 @@ pub fn split_repeat_tasks(
             path,
             name,
             plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
+            overdue_date: None,
             plan_qty,
             actual_qty: 0.0,
             unit: unit.clone(),
@@ -290,9 +292,12 @@ mod tests {
         Goal {
             id: id.to_string(),
             name: name.to_string(),
+            parent_id: None,
+            path: format!("/{}", id),
             deadline: Some(deadline.to_string()),
             total_qty,
             unit: unit.to_string(),
+            sort_order: 0,
             created_at: "2026-06-24T00:00:00".to_string(),
         }
     }
