@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use uuid::Uuid;
 
 use crate::db::models::{Goal, ReplanPreview, ReplanPreviewItem, RepeatSplitInput, Task};
@@ -210,10 +210,13 @@ pub fn build_replan_preview(
     })
 }
 
-/// 重复拆解任务（纯文字类：每天重复 or 单次）
+/// 重复拆解任务（纯文字类：按频率重复 or 单次）
 ///
 /// - end_date=None 或等于 start_date → 生成单个任务
-/// - end_date > start_date → 从 start_date 到 end_date 每天生成一个任务
+/// - end_date > start_date → 按 frequency 在日期范围内生成任务
+///   - daily（默认）：每天生成一个
+///   - weekly：命中 weekdays 集合的周几生成
+///   - monthly：命中 month_days 集合的几号生成
 /// - 任务的 plan_qty 固定（默认 1），unit 可选（默认空）
 pub fn split_repeat_tasks(
     goal: &Goal,
@@ -244,39 +247,94 @@ pub fn split_repeat_tasks(
         None => start, // 无结束日期 → 单次
     };
 
+    // 频率解析与校验
+    let frequency = input
+        .frequency
+        .as_deref()
+        .unwrap_or("daily")
+        .to_lowercase();
+    let is_single = start == end;
+
+    // 单次任务不校验频率参数
+    if !is_single {
+        match frequency.as_str() {
+            "weekly" => {
+                if input.weekdays.as_ref().map_or(true, |v| v.is_empty()) {
+                    return Err(AppError::Param(
+                        "weekly 频率必须指定至少一个周几".into(),
+                    ));
+                }
+            }
+            "monthly" => {
+                if input.month_days.as_ref().map_or(true, |v| v.is_empty()) {
+                    return Err(AppError::Param(
+                        "monthly 频率必须指定至少一个日期".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 命中判定：给定 cursor 是否应生成任务
+    let should_generate = |cursor: NaiveDate| -> bool {
+        if is_single {
+            return true;
+        }
+        match frequency.as_str() {
+            "weekly" => {
+                let wd = cursor.weekday().num_days_from_sunday() as u8;
+                input
+                    .weekdays
+                    .as_ref()
+                    .map_or(false, |set| set.contains(&wd))
+            }
+            "monthly" => {
+                let d = cursor.day() as u8;
+                input
+                    .month_days
+                    .as_ref()
+                    .map_or(false, |set| set.contains(&d))
+            }
+            _ => true, // daily
+        }
+    };
+
     let mut tasks = Vec::new();
-    let mut day_index = 0;
+    let mut seq_index = 0; // 实际生成任务的序号
     let mut cursor = start;
 
     while cursor <= end {
-        day_index += 1;
-        let task_id = Uuid::new_v4().to_string();
-        let path = format!("/{}/{}", goal.id, task_id);
+        if should_generate(cursor) {
+            seq_index += 1;
+            let task_id = Uuid::new_v4().to_string();
+            let path = format!("/{}/{}", goal.id, task_id);
 
-        let name = if start == end {
-            input.name.clone()
-        } else {
-            format!("{} - 第{}天", input.name, day_index)
-        };
+            let name = if is_single {
+                input.name.clone()
+            } else {
+                format!("{} - 第{}次", input.name, seq_index)
+            };
 
-        tasks.push(Task {
-            id: task_id,
-            goal_id: goal.id.clone(),
-            stage_id: None,
-            parent_id: Some(goal.id.clone()),
-            path,
-            name,
-            plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
-            overdue_date: None,
-            plan_qty,
-            actual_qty: 0.0,
-            unit: unit.clone(),
-            status: "pending".to_string(),
-            is_manual: 0,
-            source: "auto".to_string(),
-            sort_order: (day_index - 1) as i64,
-            created_at: now.clone(),
-        });
+            tasks.push(Task {
+                id: task_id,
+                goal_id: goal.id.clone(),
+                stage_id: None,
+                parent_id: Some(goal.id.clone()),
+                path,
+                name,
+                plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
+                overdue_date: None,
+                plan_qty,
+                actual_qty: 0.0,
+                unit: unit.clone(),
+                status: "pending".to_string(),
+                is_manual: 0,
+                source: "auto".to_string(),
+                sort_order: (seq_index - 1) as i64,
+                created_at: now.clone(),
+            });
+        }
 
         cursor += chrono::Duration::days(1);
     }

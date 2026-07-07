@@ -13,6 +13,9 @@ import {
   NEmpty,
   NDataTable,
   NCheckbox,
+  NCheckboxGroup,
+  NRadioGroup,
+  NRadio,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -23,6 +26,7 @@ import * as taskApi from "@/api/task";
 import * as goalApi from "@/api/goal";
 import type {
   Goal,
+  GoalTreeNode,
   Task,
   ReplanPreview,
   CreateTaskInput,
@@ -93,7 +97,37 @@ const taskForm = reactive({
   end_date: null as number | null,
   plan_qty: 1,
   unit: "个",
+  // 重复任务频率：daily | weekly | monthly
+  frequency: "daily" as "daily" | "weekly" | "monthly",
+  // 周几（0=周日, 1-6=周一至周六），仅 weekly 有效
+  weekdays: [] as number[],
+  // 每月几号（1-31），仅 monthly 有效
+  month_days: [] as number[],
 });
+
+// 重复任务频率选项
+const frequencyOptions = [
+  { label: "每天", value: "daily" },
+  { label: "每周", value: "weekly" },
+  { label: "每月", value: "monthly" },
+];
+
+// 周几选项（0=周日, 1-6=周一至周六）
+const weekdayOptions = [
+  { label: "日", value: 0 },
+  { label: "一", value: 1 },
+  { label: "二", value: 2 },
+  { label: "三", value: 3 },
+  { label: "四", value: 4 },
+  { label: "五", value: 5 },
+  { label: "六", value: 6 },
+];
+
+// 每月几号选项（1-31）
+const monthDayOptions = Array.from({ length: 31 }, (_, i) => ({
+  label: `${i + 1}`,
+  value: i + 1,
+}));
 
 // ===== 补完成弹窗 =====
 const showBackfillModal = ref(false);
@@ -226,6 +260,9 @@ function openCreateTaskModal(goalId: string) {
   taskForm.end_date = null;
   taskForm.plan_qty = 1;
   taskForm.unit = "个";
+  taskForm.frequency = "daily";
+  taskForm.weekdays = [];
+  taskForm.month_days = [];
   showTaskModal.value = true;
 }
 
@@ -237,13 +274,24 @@ async function handleSaveTask() {
   try {
     if (taskModalMode.value === "create") {
       if (taskForm.is_repeat) {
-        // 重复任务：按日期范围每天生成一个任务
+        // 重复任务：按频率在日期范围内生成任务
         if (!taskForm.plan_date) {
           message.warning("请选择起始日期");
           return;
         }
         if (!taskForm.end_date) {
           message.warning("重复任务请选择结束日期");
+          return;
+        }
+        if (taskForm.frequency === "weekly" && taskForm.weekdays.length === 0) {
+          message.warning("请至少选择一个周几");
+          return;
+        }
+        if (
+          taskForm.frequency === "monthly" &&
+          taskForm.month_days.length === 0
+        ) {
+          message.warning("请至少选择一个日期");
           return;
         }
         const start_date = format(new Date(taskForm.plan_date), "yyyy-MM-dd");
@@ -255,6 +303,11 @@ async function handleSaveTask() {
           end_date,
           plan_qty: taskForm.plan_qty,
           unit: taskForm.unit,
+          frequency: taskForm.frequency,
+          weekdays:
+            taskForm.frequency === "weekly" ? taskForm.weekdays : undefined,
+          month_days:
+            taskForm.frequency === "monthly" ? taskForm.month_days : undefined,
         };
         const tasks = await goalApi.repeatSplit(input);
         message.success(`已生成 ${tasks.length} 个任务`);
@@ -527,24 +580,70 @@ function handleTaskAction(key: string, task: Task) {
   }
 }
 
-// ===== 拖拽归属：共享状态 + 跨目标移动 =====
+// ===== 拖拽：共享状态 + 跨目标移动 =====
 const draggingTaskId = ref<string | null>(null);
+const draggingGoal = ref<Goal | null>(null);
 const dragOverGoalId = ref<string | null>(null);
+const dropPosition = ref<"before" | "inside" | "after">("inside");
+const dragOverTaskId = ref<string | null>(null);
+const taskDropPosition = ref<"before" | "after">("before");
 
-async function handleMoveTask(task: Task, targetGoalId: string) {
+async function handleMoveTask(
+  task: Task,
+  targetGoalId: string,
+  beforeTaskId?: string | null,
+) {
   try {
     await taskApi.moveTask({
       task_id: task.id,
       goal_id: targetGoalId,
+      before_task_id: beforeTaskId ?? null,
     });
-    message.success(`已将任务"${task.name}"移动到新目标`);
+    message.success(`已将任务"${task.name}"移动到新位置`);
     await goalStore.fetchGoalTree();
     await goalStore.fetchProgresses();
-    // 自动展开目标节点，便于用户立刻看到移动结果
     expandedNodes.value.add(targetGoalId);
   } catch (e) {
     message.error(String(e));
   }
+}
+
+async function handleMoveGoal(
+  goalId: string,
+  newParentId: string | null,
+  beforeGoalId?: string | null,
+) {
+  try {
+    await goalApi.moveGoal({
+      goal_id: goalId,
+      new_parent_id: newParentId,
+      before_goal_id: beforeGoalId ?? null,
+    });
+    message.success("目标已移动到新位置");
+    await goalStore.fetchGoalTree();
+    await goalStore.fetchProgresses();
+    // 展开新父目标（若有）以便用户立刻看到结果
+    if (newParentId) {
+      expandedNodes.value.add(newParentId);
+    }
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+/** 查找目标的下一个同级目标 ID（用于目标拖拽插入下方） */
+function findNextSiblingId(goalId: string): string | null {
+  function search(nodes: GoalTreeNode[]): string | null {
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].goal.id === goalId) {
+        return nodes[i + 1]?.goal.id ?? null;
+      }
+      const found = search(nodes[i].sub_goals);
+      if (found) return found;
+    }
+    return null;
+  }
+  return search(goalStore.goalTree);
 }
 
 // ===== 向递归子组件注入树 API（避免逐层 prop 透传）=====
@@ -561,8 +660,14 @@ const treeApi: GoalTreeApi = {
   buildTaskActions,
   handleTaskAction,
   handleMoveTask,
+  handleMoveGoal,
   draggingTaskId,
+  draggingGoal,
   dragOverGoalId,
+  dropPosition,
+  dragOverTaskId,
+  taskDropPosition,
+  findNextSiblingId,
 };
 provide(goalTreeApiKey, treeApi);
 </script>
@@ -667,14 +772,60 @@ provide(goalTreeApiKey, treeApi);
         </NFormItem>
         <!-- 重复开关（仅创建模式显示） -->
         <div v-if="taskModalMode === 'create'" class="flex items-center gap-2">
-          <NCheckbox v-model:checked="taskForm.is_repeat"> 每天重复 </NCheckbox>
+          <NCheckbox v-model:checked="taskForm.is_repeat"> 重复任务 </NCheckbox>
           <span class="text-xs text-gray-400">
             {{
               taskForm.is_repeat
-                ? "在日期范围内每天生成一个任务"
+                ? "在日期范围内按频率生成多个任务"
                 : "只生成一个单次任务"
             }}
           </span>
+        </div>
+        <!-- 频率选择（仅创建模式 + 重复任务时显示） -->
+        <div v-if="taskModalMode === 'create' && taskForm.is_repeat">
+          <NFormItem label="频率" :show-feedback="false">
+            <NRadioGroup v-model:value="taskForm.frequency">
+              <NRadio
+                v-for="opt in frequencyOptions"
+                :key="opt.value"
+                :value="opt.value"
+              >
+                {{ opt.label }}
+              </NRadio>
+            </NRadioGroup>
+          </NFormItem>
+          <!-- 周几多选（仅 weekly） -->
+          <NFormItem
+            v-if="taskForm.frequency === 'weekly'"
+            label="周几"
+            :show-feedback="false"
+          >
+            <NCheckboxGroup v-model:value="taskForm.weekdays">
+              <NSpace>
+                <NCheckbox
+                  v-for="opt in weekdayOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                >
+                  {{ opt.label }}
+                </NCheckbox>
+              </NSpace>
+            </NCheckboxGroup>
+          </NFormItem>
+          <!-- 每月几号多选（仅 monthly） -->
+          <NFormItem
+            v-if="taskForm.frequency === 'monthly'"
+            label="日期"
+            :show-feedback="false"
+          >
+            <NSelect
+              v-model:value="taskForm.month_days"
+              :options="monthDayOptions"
+              multiple
+              placeholder="选择每月几号"
+              style="width: 100%"
+            />
+          </NFormItem>
         </div>
         <NSpace>
           <NFormItem
@@ -717,7 +868,7 @@ provide(goalTreeApiKey, treeApi);
           class="text-xs text-blue-500 bg-blue-50 px-3 py-2 rounded"
         >
           <Icon icon="mdi:information" class="inline-block mr-1" />
-          纯文字类任务（如练习题）可勾选"每天重复"在日期范围内每天生成；视频类任务请使用"视频拆解"
+          纯文字类任务（如练习题）可勾选"重复任务"按每天/每周/每月生成；视频类任务请使用"视频拆解"
         </div>
       </div>
       <template #footer>

@@ -37,16 +37,16 @@
 
 ## 项目简介
 
-**SelfPilot** 解决了传统 Todo 工具在「长期目标管理」上的不足：用户常常只能记录零散任务，却难以把一个宏大目标（如 *30 天背完 3000 个单词*、*3 个月通过 PMP*）自动拆解为可执行的每日任务，并实时掌握整体进度。
+**SelfPilot** 解决了传统 Todo 工具在「长期目标管理」上的不足：用户常常只能记录零散任务，却难以把一个宏大目标（如 _30 天背完 3000 个单词_、_3 个月通过 PMP_）自动拆解为可执行的每日任务，并实时掌握整体进度。
 
 ### 核心价值
 
-| 特性 | 说明 |
-|------|------|
-| **三级结构** | 目标 → 阶段 → 任务，兼顾宏观规划与微观执行 |
+| 特性         | 说明                                             |
+| ------------ | ------------------------------------------------ |
+| **三级结构** | 目标 → 阶段 → 任务，兼顾宏观规划与微观执行       |
 | **自动拆解** | 按截止日期把目标总量平均分配到每天，余数自动前置 |
-| **进度汇总** | 子任务完成情况实时向上反馈到阶段与目标 |
-| **离线优先** | 数据完全存储在本地 SQLite，无需登录、无需网络 |
+| **进度汇总** | 子任务完成情况实时向上反馈到阶段与目标           |
+| **离线优先** | 数据完全存储在本地 SQLite，无需登录、无需网络    |
 
 ---
 
@@ -55,45 +55,51 @@
 应用围绕 **6 个固定模块**展开，对应左侧导航栏：
 
 ### 目标总览
+
 展示所有目标完成百分比（环形进度）、今日待办、逾期任务，支持快速 **完成 / 跳过 / 补完成**。
 
 ### 目标树
+
 以层级卡片形式管理目标、阶段与任务；支持创建目标、自动拆解、添加阶段、重新规划。
 
 ### 日历视图
+
 月 / 周 / 日三视图展示每日任务分布，支持点击查看详情并批量完成 / 跳过。
 
 ### 数据统计
+
 - 柱状图：各目标完成度
 - 折线图：近 7 / 30 天完成趋势
 - 日历热力图：90 / 180 / 365 天切换
 - 完成预测：基于过去 7 天平均速度给出建议
 
 ### 鼓励语库
+
 预设 + 自定义鼓励语，按连续打卡天数智能抽取等级（normal / advanced / highlight / celebration），全部目标完成时触发庆祝语。
 
 ### 设置
+
 浅色 / 深色主题切换，JSON 数据导出 / 导入，支持 **跳过 / 覆盖 / 重命名** 三种 ID 冲突处理。
 
 ---
 
 ## 技术栈
 
-| 层级 | 技术 | 版本 | 说明 |
-|------|------|------|------|
-| 桌面框架 | [Tauri](https://tauri.app/) | 2.x | 系统 WebView 渲染，包体小、启动快 |
-| 后端语言 | [Rust](https://www.rust-lang.org/) | 1.80+ | 内存安全，SQLite 查询与汇总逻辑均在 Rust 侧 |
-| 前端框架 | [Vue](https://vuejs.org/) | 3.5+ | Composition API + `<script setup>` |
-| 前端语言 | [TypeScript](https://www.typescriptlang.org/) | 5.6+ | 与 Rust 模型对齐，减少 IPC 类型错位 |
-| 构建工具 | [Vite](https://vitejs.dev/) | 5.x | Tauri 官方默认，HMR 极速 |
-| UI 组件库 | [Naive UI](https://www.naiveui.com/) | 2.x | Vue 3 原生，支持深色模式与主题定制 |
-| CSS 引擎 | [UnoCSS](https://unocss.dev/) | 0.63 | 原子化按需生成 |
-| 图标库 | [@iconify/vue](https://iconify.design/) | 4.x | 按需加载，图标映射零成本 |
-| 状态管理 | [Pinia](https://pinia.vuejs.org/) + persistedstate | 2.x / 3.x | 主题持久化到 localStorage |
-| 日期处理 | [date-fns](https://date-fns.org/) | 3.x | 函数式、按需引入 |
-| 图表库 | [ECharts](https://echarts.apache.org/)（vue-echarts） | 5.5+ | 柱状图、折线图、热力图单库覆盖 |
-| 数据库 | SQLite + [sqlx](https://github.com/launchbadge/sqlx) | 3.x / 0.8 | 编译时 SQL 检查，异步原生 |
-| 数据序列化 | [serde](https://serde.rs/) + serde_json | 1.x | 导入导出 JSON 备份 |
+| 层级       | 技术                                                  | 版本      | 说明                                        |
+| ---------- | ----------------------------------------------------- | --------- | ------------------------------------------- |
+| 桌面框架   | [Tauri](https://tauri.app/)                           | 2.x       | 系统 WebView 渲染，包体小、启动快           |
+| 后端语言   | [Rust](https://www.rust-lang.org/)                    | 1.80+     | 内存安全，SQLite 查询与汇总逻辑均在 Rust 侧 |
+| 前端框架   | [Vue](https://vuejs.org/)                             | 3.5+      | Composition API + `<script setup>`          |
+| 前端语言   | [TypeScript](https://www.typescriptlang.org/)         | 5.6+      | 与 Rust 模型对齐，减少 IPC 类型错位         |
+| 构建工具   | [Vite](https://vitejs.dev/)                           | 5.x       | Tauri 官方默认，HMR 极速                    |
+| UI 组件库  | [Naive UI](https://www.naiveui.com/)                  | 2.x       | Vue 3 原生，支持深色模式与主题定制          |
+| CSS 引擎   | [UnoCSS](https://unocss.dev/)                         | 0.63      | 原子化按需生成                              |
+| 图标库     | [@iconify/vue](https://iconify.design/)               | 4.x       | 按需加载，图标映射零成本                    |
+| 状态管理   | [Pinia](https://pinia.vuejs.org/) + persistedstate    | 2.x / 3.x | 主题持久化到 localStorage                   |
+| 日期处理   | [date-fns](https://date-fns.org/)                     | 3.x       | 函数式、按需引入                            |
+| 图表库     | [ECharts](https://echarts.apache.org/)（vue-echarts） | 5.5+      | 柱状图、折线图、热力图单库覆盖              |
+| 数据库     | SQLite + [sqlx](https://github.com/launchbadge/sqlx)  | 3.x / 0.8 | 编译时 SQL 检查，异步原生                   |
+| 数据序列化 | [serde](https://serde.rs/) + serde_json               | 1.x       | 导入导出 JSON 备份                          |
 
 ---
 
@@ -142,7 +148,7 @@ SelfPilot/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/xingyuanshenshuang/SelfPilot.git
+git clone https://github.com/xingyuanshenhuang/SelfPilot.git
 cd SelfPilot
 
 # 2. 安装前端依赖
@@ -160,11 +166,11 @@ npm run tauri:dev
 
 ### 环境要求
 
-| 工具 | 最低版本 | 说明 |
-|------|----------|------|
-| [Node.js](https://nodejs.org/) | 18+ | 前端构建与依赖管理 |
-| [Rust](https://www.rust-lang.org/tools/install) | 1.80+ | 编译 Tauri 后端 |
-| [Tauri 2 Prerequisites](https://tauri.app/start/prerequisites/) | — | 各平台系统依赖（WebView 等） |
+| 工具                                                            | 最低版本 | 说明                         |
+| --------------------------------------------------------------- | -------- | ---------------------------- |
+| [Node.js](https://nodejs.org/)                                  | 18+      | 前端构建与依赖管理           |
+| [Rust](https://www.rust-lang.org/tools/install)                 | 1.80+    | 编译 Tauri 后端              |
+| [Tauri 2 Prerequisites](https://tauri.app/start/prerequisites/) | —        | 各平台系统依赖（WebView 等） |
 
 **平台专属依赖：**
 
@@ -177,7 +183,7 @@ npm run tauri:dev
 1. **克隆仓库**
 
    ```bash
-   git clone https://github.com/xingyuanshenshuang/SelfPilot.git
+   git clone https://github.com/xingyuanshenhuang/SelfPilot.git
    cd SelfPilot
    ```
 
@@ -214,13 +220,13 @@ npm run tauri:build
 
 ### 可用脚本
 
-| 命令 | 说明 |
-|------|------|
-| `npm run dev` | 仅启动 Vite 前端开发服务器 |
-| `npm run build` | 类型检查 (`vue-tsc`) + 生产构建前端 |
-| `npm run preview` | 预览前端构建产物 |
-| `npm run tauri:dev` | 启动 Tauri 开发模式（前端 + Rust） |
-| `npm run tauri:build` | 构建生产级桌面安装包 |
+| 命令                  | 说明                                |
+| --------------------- | ----------------------------------- |
+| `npm run dev`         | 仅启动 Vite 前端开发服务器          |
+| `npm run build`       | 类型检查 (`vue-tsc`) + 生产构建前端 |
+| `npm run preview`     | 预览前端构建产物                    |
+| `npm run tauri:dev`   | 启动 Tauri 开发模式（前端 + Rust）  |
+| `npm run tauri:build` | 构建生产级桌面安装包                |
 
 ---
 
@@ -242,11 +248,11 @@ npm run tauri:build
 
 ### 4. 任务生命周期
 
-| 操作 | 说明 |
-|------|------|
-| 完成 | 支持部分完成（`actual_qty < plan_qty` → `partial`） |
-| 跳过 | 标记为 `skipped`，不计入完成，不影响后续计划 |
-| 补完成 | 仅更新历史任务的实际完成量，**绝不重新分配未来任务** |
+| 操作     | 说明                                                     |
+| -------- | -------------------------------------------------------- |
+| 完成     | 支持部分完成（`actual_qty < plan_qty` → `partial`）      |
+| 跳过     | 标记为 `skipped`，不计入完成，不影响后续计划             |
+| 补完成   | 仅更新历史任务的实际完成量，**绝不重新分配未来任务**     |
 | 重新规划 | 过滤已跳过任务，保留手动调整项，支持 Before / After 预览 |
 
 ### 5. 鼓励机制
@@ -274,14 +280,14 @@ npm run tauri:build
 
 整体完成度约 **85% ~ 90%**，已具备内测可用条件。
 
-| 迭代 | 计划内容 | 状态 |
-|------|----------|------|
-| Sprint 1 | 创建目标、自动拆解、今日待办、完成 / 跳过 | ✅ 完成 |
-| Sprint 2 | 补完成、重新规划、阶段管理 | ⚠️ ~90%（目标树手动添加任务 UI 待补） |
-| Sprint 3 | 日历视图（月/周/日）、基础统计 | ✅ 完成 |
-| Sprint 4 | 鼓励语库、设置、数据导出导入 | ✅ ~95% |
-| Sprint 5 | 日历热力图、鼓励语个性化规则 | ✅ 完成 |
-| Sprint 6 | 完成时间预测 | ✅ 完成 |
+| 迭代     | 计划内容                                  | 状态                                  |
+| -------- | ----------------------------------------- | ------------------------------------- |
+| Sprint 1 | 创建目标、自动拆解、今日待办、完成 / 跳过 | ✅ 完成                               |
+| Sprint 2 | 补完成、重新规划、阶段管理                | ⚠️ ~90%（目标树手动添加任务 UI 待补） |
+| Sprint 3 | 日历视图（月/周/日）、基础统计            | ✅ 完成                               |
+| Sprint 4 | 鼓励语库、设置、数据导出导入              | ✅ ~95%                               |
+| Sprint 5 | 日历热力图、鼓励语个性化规则              | ✅ 完成                               |
+| Sprint 6 | 完成时间预测                              | ✅ 完成                               |
 
 ### 后续规划
 
@@ -299,6 +305,7 @@ npm run tauri:build
 Tauri 构建脚本调用 Windows Resource Compiler 时可能出现环境级 panic（`Os { code: 0 }`），属于工具链 / 环境兼容问题，非代码逻辑错误。
 
 **解决方法：**
+
 1. 安装完整的 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（勾选「使用 C++ 的桌面开发」工作负载）
 2. 确保 Windows SDK 已安装
 3. 在「x64 Native Tools Command Prompt for VS」中重新执行构建
@@ -312,18 +319,21 @@ Tauri 构建脚本调用 Windows Resource Compiler 时可能出现环境级 pani
 ```bash
 npm install
 ```
+
 </details>
 
 <details>
 <summary><b>修改 Rust 代码后未生效</b></summary>
 
 Tauri 开发模式下，Rust 代码改动会自动重新编译；若未生效，请手动重启 `npm run tauri:dev`，或在终端按 <kbd>R</kbd> 触发重新编译。
+
 </details>
 
 <details>
 <summary><b>数据库迁移失败</b></summary>
 
 sqlx 迁移脚本位于 `src-tauri/migrations/`。如遇迁移冲突，可删除应用数据目录下的 `selfpilot.db` 重新初始化（**会清空数据，请先导出 JSON 备份**）。
+
 </details>
 
 ---
@@ -394,6 +404,6 @@ of this software and associated documentation files...
 
 **SelfPilot** · 让每一个长期目标都拥有清晰的执行路径
 
-[报告问题](https://github.com/xingyuanshenshuang/SelfPilot/issues) · [发起讨论](https://github.com/xingyuanshenshuang/SelfPilot/discussions)
+[报告问题](https://github.com/xingyuanshenhuang/SelfPilot/issues) · [发起讨论](https://github.com/xingyuanshenhuang/SelfPilot/discussions)
 
 </div>

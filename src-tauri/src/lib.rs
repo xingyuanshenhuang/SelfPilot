@@ -50,6 +50,7 @@ pub fn run() {
             commands::goal::repeat_split,
             commands::goal::replan_preview,
             commands::goal::replan_goal,
+            commands::goal::move_goal,
             // 任务相关
             commands::task::create_task,
             commands::task::complete_task,

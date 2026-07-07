@@ -40,6 +40,12 @@ export interface RepeatSplitInput {
   end_date?: string | null;
   plan_qty?: number;
   unit?: string;
+  /** 频率：daily | weekly | monthly（不传或 daily → 每天重复） */
+  frequency?: string;
+  /** 周几（0=周日, 1-6=周一至周六），仅 weekly 有效 */
+  weekdays?: number[];
+  /** 每月几号（1-31），仅 monthly 有效 */
+  month_days?: number[];
 }
 
 /** 目标树节点 */
@@ -128,6 +134,17 @@ export interface MoveTaskInput {
   goal_id?: string;
   /** 阶段内移动时指定新阶段 ID */
   stage_id?: string | null;
+  /** 插入到此任务之前（同级排序）；为 None 且跨目标时放置到目标直属任务列表最前面 */
+  before_task_id?: string | null;
+}
+
+/** 移动目标输入（跨层级归属调整与同级排序） */
+export interface MoveGoalInput {
+  goal_id: string;
+  /** 新父目标 ID（None=总目标） */
+  new_parent_id: string | null;
+  /** 插入到此目标之前（同级排序）；None=追加到末尾 */
+  before_goal_id?: string | null;
 }
 
 /** 重新规划预览项 */

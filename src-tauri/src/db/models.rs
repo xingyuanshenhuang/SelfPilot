@@ -67,7 +67,7 @@ pub struct UpdateGoalInput {
     pub unit: Option<String>,
 }
 
-/// 重复拆解输入（纯文字类任务：每天重复 or 单次）
+/// 重复拆解输入（纯文字类任务：按频率重复 or 单次）
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepeatSplitInput {
     pub goal_id: String,
@@ -78,6 +78,15 @@ pub struct RepeatSplitInput {
     pub end_date: Option<String>,
     pub plan_qty: Option<f64>,
     pub unit: Option<String>,
+    /// 频率：daily | weekly | monthly（None 或 daily → 每天重复）
+    #[serde(default)]
+    pub frequency: Option<String>,
+    /// 周几（0=周日, 1-6=周一至周六），仅 weekly 有效
+    #[serde(default)]
+    pub weekdays: Option<Vec<u8>>,
+    /// 每月几号（1-31），仅 monthly 有效
+    #[serde(default)]
+    pub month_days: Option<Vec<u8>>,
 }
 
 /// 目标树节点（含子目标和子任务）
@@ -266,17 +275,33 @@ pub struct ReplanResult {
     pub tasks: Vec<Task>,
 }
 
-/// 移动任务（支持跨目标归属调整与阶段移动）
+/// 移动任务（支持跨目标归属调整、阶段移动、同级排序）
 ///
-/// - 仅提供 `goal_id`：跨目标移动任务（拖拽归属）
-/// - 仅提供 `stage_id`：阶段内移动
-/// - 同时提供：以 goal_id 为准，stage_id 一并更新
-/// - 均不提供：错误
+/// - `goal_id=Some` → 跨目标移动（拖拽归属）：更新 goal_id、parent_id、path，清空 stage_id
+/// - `goal_id=None & stage_id=Some` → 阶段内移动：仅更新 stage_id、path
+/// - `before_task_id=Some` → 插入到该任务之前（同级排序）；为 None 且跨目标时放置到目标直属任务最前面
 #[derive(Debug, Clone, Deserialize)]
 pub struct MoveTaskInput {
     pub task_id: String,
     pub goal_id: Option<String>,
     pub stage_id: Option<String>,
+    /// 插入到此任务之前（用于同级排序）；None 表示放置到目标直属任务列表最前面
+    #[serde(default)]
+    pub before_task_id: Option<String>,
+}
+
+/// 移动目标（支持跨层级归属调整与同级排序）
+///
+/// - `new_parent_id`：新父目标 ID；None 表示提升为总目标
+/// - `before_goal_id`：插入到此目标之前（用于同级排序）；None 表示追加到末尾
+#[derive(Debug, Clone, Deserialize)]
+pub struct MoveGoalInput {
+    pub goal_id: String,
+    /// 新父目标 ID（None=总目标）
+    pub new_parent_id: Option<String>,
+    /// 插入到此目标之前（同级排序）；None=追加到末尾
+    #[serde(default)]
+    pub before_goal_id: Option<String>,
 }
 
 /// 日历视图任务（带目标名称和逾期标记）

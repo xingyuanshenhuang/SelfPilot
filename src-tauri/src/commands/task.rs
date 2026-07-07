@@ -257,11 +257,13 @@ pub async fn backfill_task(
     Ok(updated)
 }
 
-/// 移动任务（支持跨目标归属调整与阶段移动）
+/// 移动任务（支持跨目标归属调整、阶段移动、同级排序）
 ///
 /// - `goal_id=Some` → 跨目标移动（拖拽归属）：更新 goal_id、parent_id、path，清空 stage_id
 /// - `goal_id=None & stage_id=Some` → 阶段内移动：仅更新 stage_id、path
-/// - 校验：目标 goal 必须存在；新 goal_id 不能与当前相同（避免无意义写入）
+/// - `before_task_id=Some` → 插入到该任务之前（同级排序）
+/// - `before_task_id=None & goal_id=Some` → 放置到目标直属任务列表最前面
+/// - 校验：目标 goal 必须存在；新 goal_id 不能与当前相同（除非同时指定 before_task_id 排序）
 #[tauri::command]
 pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppResult<Task> {
     let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
@@ -270,6 +272,7 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
         .await?
         .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
 
+    let cross_goal = input.goal_id.is_some();
     let new_goal_id = match &input.goal_id {
         Some(gid) => {
             // 校验目标存在
@@ -278,17 +281,13 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
                 .fetch_optional(&state.0)
                 .await?
                 .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", gid)))?;
-            // 避免无意义同目标移动
-            if gid == &task.goal_id {
-                return Err(AppError::Business("任务已在该目标下，无需移动".into()));
-            }
             gid.clone()
         }
         None => task.goal_id.clone(),
     };
 
     // 计算新 stage_id：跨目标移动时清空（旧 stage 属于旧 goal），否则按入参
-    let new_stage_id: Option<String> = if input.goal_id.is_some() {
+    let new_stage_id: Option<String> = if cross_goal {
         None
     } else {
         input.stage_id.clone()
@@ -300,23 +299,69 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
         None => format!("/{}/{}", new_goal_id, input.task_id),
     };
 
-    if input.goal_id.is_some() {
-        // 跨目标移动：更新 goal_id、parent_id（指向新 goal）、stage_id、path
+    // 计算 sort_order
+    let new_sort_order: i64 = if let Some(before_id) = &input.before_task_id {
+        // 插入到 before_task 之前：取 before 的 sort_order，将 >= 该值的其他任务后移
+        let before: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+            .bind(before_id)
+            .fetch_optional(&state.0)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("前置任务 {} 不存在", before_id)))?;
+        if before.goal_id != new_goal_id {
+            return Err(AppError::Param(
+                "前置任务不属于目标目标，无法排序".into(),
+            ));
+        }
+        let target_sort = before.sort_order;
         sqlx::query(
-            "UPDATE tasks SET goal_id = ?, parent_id = ?, stage_id = ?, path = ? WHERE id = ?",
+            "UPDATE tasks SET sort_order = sort_order + 1
+             WHERE goal_id = ? AND sort_order >= ? AND id != ?",
+        )
+        .bind(&new_goal_id)
+        .bind(target_sort)
+        .bind(&input.task_id)
+        .execute(&state.0)
+        .await?;
+        target_sort
+    } else {
+        // 无前置：追加到末尾（跨目标或同目标均适用）
+        let max_sort: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(sort_order) FROM tasks WHERE goal_id = ? AND id != ?")
+                .bind(&new_goal_id)
+                .bind(&input.task_id)
+                .fetch_one(&state.0)
+                .await?;
+        max_sort.unwrap_or(-1) + 1
+    };
+
+    if cross_goal {
+        // 跨目标移动：更新 goal_id、parent_id（指向新 goal）、stage_id、path、sort_order
+        sqlx::query(
+            "UPDATE tasks SET goal_id = ?, parent_id = ?, stage_id = ?, path = ?, sort_order = ? WHERE id = ?",
         )
         .bind(&new_goal_id)
         .bind(&new_goal_id)
         .bind(None::<String>)
         .bind(&new_path)
+        .bind(new_sort_order)
         .bind(&input.task_id)
         .execute(&state.0)
         .await?;
-    } else {
-        // 阶段内移动：仅更新 stage_id、path
-        sqlx::query("UPDATE tasks SET stage_id = ?, path = ? WHERE id = ?")
+    } else if input.before_task_id.is_some() {
+        // 同目标排序：仅更新 sort_order（及可能的 stage_id/path）
+        sqlx::query("UPDATE tasks SET stage_id = ?, path = ?, sort_order = ? WHERE id = ?")
             .bind(&new_stage_id)
             .bind(&new_path)
+            .bind(new_sort_order)
+            .bind(&input.task_id)
+            .execute(&state.0)
+            .await?;
+    } else {
+        // 同目标追加到末尾：更新 sort_order（及可能的 stage_id/path）
+        sqlx::query("UPDATE tasks SET stage_id = ?, path = ?, sort_order = ? WHERE id = ?")
+            .bind(&new_stage_id)
+            .bind(&new_path)
+            .bind(new_sort_order)
             .bind(&input.task_id)
             .execute(&state.0)
             .await?;

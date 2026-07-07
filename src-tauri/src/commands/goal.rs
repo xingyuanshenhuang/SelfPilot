@@ -3,8 +3,8 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::db::models::{
-    CreateGoalInput, Goal, GoalTreeNode, ProgressInfo, ReplanPreview, ReplanResult, RepeatSplitInput,
-    Task, UpdateGoalInput,
+    CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
+    RepeatSplitInput, Task, UpdateGoalInput,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
@@ -212,6 +212,8 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
 /// 删除目标（级联删除所有子目标和任务）
 #[tauri::command]
 pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> {
+    let mut tx = state.0.begin().await?;
+
     // 递归收集所有后代目标 ID（含自身）
     let mut to_delete: Vec<String> = vec![id.clone()];
     let mut queue = vec![id.clone()];
@@ -219,7 +221,7 @@ pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> 
         let children: Vec<String> =
             sqlx::query_scalar("SELECT id FROM goals WHERE parent_id = ?")
                 .bind(&current)
-                .fetch_all(&state.0)
+                .fetch_all(&mut *tx)
                 .await?;
         for child in children {
             to_delete.push(child.clone());
@@ -231,7 +233,7 @@ pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> 
     for goal_id in &to_delete {
         sqlx::query("DELETE FROM tasks WHERE goal_id = ?")
             .bind(goal_id)
-            .execute(&state.0)
+            .execute(&mut *tx)
             .await?;
     }
 
@@ -239,10 +241,11 @@ pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> 
     for goal_id in &to_delete {
         sqlx::query("DELETE FROM goals WHERE id = ?")
             .bind(goal_id)
-            .execute(&state.0)
+            .execute(&mut *tx)
             .await?;
     }
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -251,9 +254,11 @@ pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> 
 /// 根据 goal.total_qty 和 goal.deadline 按剩余天数平均分配
 #[tauri::command]
 pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    let mut tx = state.0.begin().await?;
+
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
         .bind(&goal_id)
-        .fetch_optional(&state.0)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
 
@@ -261,7 +266,7 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
     let existing: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND source = 'auto'")
             .bind(&goal_id)
-            .fetch_one(&state.0)
+            .fetch_one(&mut *tx)
             .await?;
 
     if existing > 0 {
@@ -296,10 +301,11 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
         .bind(&task.source)
         .bind(task.sort_order)
         .bind(&task.created_at)
-        .execute(&state.0)
+        .execute(&mut *tx)
         .await?;
     }
 
+    tx.commit().await?;
     Ok(tasks)
 }
 
@@ -309,9 +315,11 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
 /// - end_date > start_date → 每天生成一个重复任务
 #[tauri::command]
 pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    let mut tx = state.0.begin().await?;
+
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
         .bind(&input.goal_id)
-        .fetch_optional(&state.0)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
 
@@ -339,10 +347,11 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(&task.source)
         .bind(task.sort_order)
         .bind(&task.created_at)
-        .execute(&state.0)
+        .execute(&mut *tx)
         .await?;
     }
 
+    tx.commit().await?;
     Ok(tasks)
 }
 
@@ -370,9 +379,11 @@ pub async fn replan_preview(goal_id: String, state: State<'_, DbPool>) -> AppRes
 /// 执行重新规划
 #[tauri::command]
 pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult<ReplanResult> {
+    let mut tx = state.0.begin().await?;
+
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
         .bind(&goal_id)
-        .fetch_optional(&state.0)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
 
@@ -380,7 +391,7 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
         "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY sort_order",
     )
     .bind(&goal_id)
-    .fetch_all(&state.0)
+    .fetch_all(&mut *tx)
     .await?;
 
     let today = chrono::Local::now().date_naive();
@@ -397,7 +408,7 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
         sqlx::query("UPDATE tasks SET plan_qty = ? WHERE id = ?")
             .bind(item.new_plan_qty)
             .bind(&item.task_id)
-            .execute(&state.0)
+            .execute(&mut *tx)
             .await?;
         updated_count += 1;
     }
@@ -406,8 +417,10 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
         "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY plan_date, sort_order",
     )
     .bind(&goal_id)
-    .fetch_all(&state.0)
+    .fetch_all(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(ReplanResult {
         goal_id: goal_id.clone(),
@@ -415,4 +428,160 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
         retained_count,
         tasks: updated_tasks,
     })
+}
+
+/// 移动目标（跨层级归属调整与同级排序）
+///
+/// - 更新 parent_id、path，并递归更新所有后代目标的 path
+/// - 环检测：新父目标不能是自身或自身后代
+/// - sort_order：若指定 before_goal_id 则插入其前，否则追加到新父下末尾
+#[tauri::command]
+pub async fn move_goal(input: MoveGoalInput, state: State<'_, DbPool>) -> AppResult<Goal> {
+    let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(&input.goal_id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
+
+    // 不允许移动到自身
+    if let Some(ref pid) = input.new_parent_id {
+        if pid == &goal.id {
+            return Err(AppError::Business("不能将目标移动到自身下".into()));
+        }
+        // 环检测：新父目标不能是自身后代
+        let mut queue = vec![goal.id.clone()];
+        while let Some(current) = queue.pop() {
+            let children: Vec<String> =
+                sqlx::query_scalar("SELECT id FROM goals WHERE parent_id = ?")
+                    .bind(&current)
+                    .fetch_all(&state.0)
+                    .await?;
+            if children.iter().any(|c| c == pid) {
+                return Err(AppError::Business(
+                    "不能将目标移动到其子目标下（会形成循环）".into(),
+                ));
+            }
+            queue.extend(children);
+        }
+        // 校验新父目标存在
+        let _parent: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+            .bind(pid)
+            .fetch_optional(&state.0)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("父目标 {} 不存在", pid)))?;
+    }
+
+    // 计算新 path
+    let new_path = match &input.new_parent_id {
+        Some(pid) => {
+            let parent: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+                .bind(pid)
+                .fetch_one(&state.0)
+                .await?;
+            format!("{}/{}", parent.path, goal.id)
+        }
+        None => format!("/{}", goal.id),
+    };
+
+    // 计算 sort_order
+    let new_sort_order: i64 = if let Some(before_id) = &input.before_goal_id {
+        let before: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+            .bind(before_id)
+            .fetch_optional(&state.0)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("前置目标 {} 不存在", before_id)))?;
+        // 校验：前置目标必须与新目标同级（同一 parent_id）
+        if before.parent_id != input.new_parent_id {
+            return Err(AppError::Param(
+                "前置目标与新父目标不同级，无法排序".into(),
+            ));
+        }
+        let target_sort = before.sort_order;
+        // 将同级中 >= target_sort 的目标后移（排除被移动目标自身）
+        if input.new_parent_id.is_some() {
+            sqlx::query(
+                "UPDATE goals SET sort_order = sort_order + 1
+                 WHERE parent_id = ? AND sort_order >= ? AND id != ?",
+            )
+            .bind(&input.new_parent_id)
+            .bind(target_sort)
+            .bind(&goal.id)
+            .execute(&state.0)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE goals SET sort_order = sort_order + 1
+                 WHERE parent_id IS NULL AND sort_order >= ? AND id != ?",
+            )
+            .bind(target_sort)
+            .bind(&goal.id)
+            .execute(&state.0)
+            .await?;
+        }
+        target_sort
+    } else {
+        // 追加到末尾
+        let count: i64 = match &input.new_parent_id {
+            Some(pid) => {
+                sqlx::query_scalar("SELECT COUNT(*) FROM goals WHERE parent_id = ? AND id != ?")
+                    .bind(pid)
+                    .bind(&goal.id)
+                    .fetch_one(&state.0)
+                    .await?
+            }
+            None => {
+                sqlx::query_scalar("SELECT COUNT(*) FROM goals WHERE parent_id IS NULL AND id != ?")
+                    .bind(&goal.id)
+                    .fetch_one(&state.0)
+                    .await?
+            }
+        };
+        count
+    };
+
+    // 更新被移动目标的 parent_id、path、sort_order
+    sqlx::query("UPDATE goals SET parent_id = ?, path = ?, sort_order = ? WHERE id = ?")
+        .bind(&input.new_parent_id)
+        .bind(&new_path)
+        .bind(new_sort_order)
+        .bind(&goal.id)
+        .execute(&state.0)
+        .await?;
+
+    // 递归更新所有后代目标的 path（parent_id 不变，仅 path 前缀变化）
+    update_descendant_paths(&goal.id, &new_path, &state.0).await?;
+
+    let updated: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(&goal.id)
+        .fetch_one(&state.0)
+        .await?;
+    Ok(updated)
+}
+
+/// 递归更新后代目标的 path
+///
+/// 给定父目标 id 和新 path，查询其直接子目标，
+/// 将每个子目标的 path 更新为 `{parent_path}/{child_id}`，再递归处理子目标的子目标。
+async fn update_descendant_paths(
+    parent_id: &str,
+    parent_path: &str,
+    pool: &sqlx::SqlitePool,
+) -> AppResult<()> {
+    let children: Vec<Goal> = sqlx::query_as("SELECT * FROM goals WHERE parent_id = ?")
+        .bind(parent_id)
+        .fetch_all(pool)
+        .await?;
+
+    for child in children {
+        let child_path = format!("{}/{}", parent_path, child.id);
+        sqlx::query("UPDATE goals SET path = ? WHERE id = ?")
+            .bind(&child_path)
+            .bind(&child.id)
+            .execute(pool)
+            .await?;
+        // 递归更新子目标的子目标
+        Box::pin(update_descendant_paths(&child.id, &child_path, pool)).await?;
+    }
+
+    Ok(())
 }

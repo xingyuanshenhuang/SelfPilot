@@ -8,6 +8,7 @@ import type {
   ReplanResult,
   RepeatSplitInput,
   GoalTreeNode,
+  MoveGoalInput,
 } from "@/types";
 
 export async function createGoal(input: CreateGoalInput): Promise<Goal> {
@@ -51,4 +52,9 @@ export async function replanPreview(goalId: string): Promise<ReplanPreview> {
 /** 执行重新规划 */
 export async function replanGoal(goalId: string): Promise<ReplanResult> {
   return invoke("replan_goal", { goalId });
+}
+
+/** 移动目标（跨层级归属调整与同级排序） */
+export async function moveGoal(input: MoveGoalInput): Promise<Goal> {
+  return invoke("move_goal", { input });
 }

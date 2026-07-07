@@ -19,12 +19,35 @@ export interface GoalTreeApi {
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
   handleTaskAction: (key: string, task: Task) => void;
-  /** 拖拽归属：将任务移动到指定目标下 */
-  handleMoveTask: (task: Task, targetGoalId: string) => Promise<void>;
-  /** 当前正在拖拽的任务 ID（共享响应式状态，用于全树视觉反馈） */
+
+  /** 拖拽任务：移动到指定目标，beforeTaskId 指定插入位置 */
+  handleMoveTask: (
+    task: Task,
+    targetGoalId: string,
+    beforeTaskId?: string | null,
+  ) => Promise<void>;
+  /** 拖拽目标：移动到新父目标下，beforeGoalId 指定插入位置 */
+  handleMoveGoal: (
+    goalId: string,
+    newParentId: string | null,
+    beforeGoalId?: string | null,
+  ) => Promise<void>;
+
+  /** 当前正在拖拽的任务 ID */
   draggingTaskId: Ref<string | null>;
-  /** 当前拖拽悬停的目标 goal ID（用于高亮放置区域） */
+  /** 当前正在拖拽的目标对象 */
+  draggingGoal: Ref<Goal | null>;
+
+  /** 拖拽悬停的目标 goal ID */
   dragOverGoalId: Ref<string | null>;
+  /** 目标放置模式：before=插入上方，inside=放入内部，after=插入下方 */
+  dropPosition: Ref<"before" | "inside" | "after">;
+  /** 拖拽悬停的任务 ID（用于任务间排序） */
+  dragOverTaskId: Ref<string | null>;
+  /** 任务放置模式：before=插入上方，after=插入下方 */
+  taskDropPosition: Ref<"before" | "after">;
+  /** 查找目标的下一个同级目标 ID（用于目标拖拽插入下方） */
+  findNextSiblingId: (goalId: string) => string | null;
 }
 
 /** provide/inject 键 */
@@ -32,6 +55,8 @@ export const goalTreeApiKey = "goalTreeApi";
 
 /** 拖拽任务时通过 dataTransfer 传递的 MIME 类型 */
 export const TASK_DRAG_MIME = "application/x-selfpilot-task-id";
+/** 拖拽目标时通过 dataTransfer 传递的 MIME 类型 */
+export const GOAL_DRAG_MIME = "application/x-selfpilot-goal-id";
 </script>
 
 <script setup lang="ts">
@@ -84,15 +109,29 @@ function onTaskSelect(key: string, task: Task) {
   api.handleTaskAction(key, task);
 }
 
-// ===== 拖拽归属 =====
+// ===== 共享拖拽状态 =====
 const draggingTaskId = api.draggingTaskId;
+const draggingGoal = api.draggingGoal;
 const dragOverGoalId = api.dragOverGoalId;
+const dropPosition = api.dropPosition;
+const dragOverTaskId = api.dragOverTaskId;
+const taskDropPosition = api.taskDropPosition;
 
-const isDragOver = computed(
-  () =>
-    dragOverGoalId.value === props.node.goal.id &&
-    draggingTaskId.value !== null,
-);
+// ===== 路径工具：判断祖先/后代关系（用于环检测） =====
+
+/** target 是否是 draggedGoal 的后代（含子目标） */
+function isDescendantOf(target: Goal, dragged: Goal): boolean {
+  if (target.id === dragged.id) return false;
+  return target.path.startsWith(dragged.path + "/");
+}
+
+/** target 是否是 draggedGoal 的祖先 */
+function isAncestorOf(target: Goal, dragged: Goal): boolean {
+  if (target.id === dragged.id) return false;
+  return dragged.path.startsWith(target.path + "/");
+}
+
+// ===== 任务拖拽 =====
 
 /** 任务行：开始拖拽 */
 function onTaskDragStart(e: DragEvent, task: Task) {
@@ -103,27 +142,149 @@ function onTaskDragStart(e: DragEvent, task: Task) {
   draggingTaskId.value = task.id;
 }
 
-/** 任务行：结束拖拽（无论是否成功放置） */
+/** 任务行：结束拖拽 */
 function onTaskDragEnd() {
   draggingTaskId.value = null;
+  dragOverTaskId.value = null;
   dragOverGoalId.value = null;
 }
 
-/** 目标卡片：进入放置区 */
-function onGoalDragOver(e: DragEvent) {
+/** 任务行：拖拽悬停（用于同级排序） */
+function onTaskRowDragOver(e: DragEvent, task: Task) {
   if (!draggingTaskId.value) return;
-  // 仅允许 move 操作
-  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   e.preventDefault();
-  dragOverGoalId.value = props.node.goal.id;
+  e.stopPropagation(); // 阻止冒泡到目标卡片
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  dragOverTaskId.value = task.id;
+  // 上半部 = before，下半部 = after
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  taskDropPosition.value =
+    e.clientY - rect.top < rect.height / 2 ? "before" : "after";
 }
 
-/** 目标卡片：离开放置区 */
-function onGoalDragLeave(e: DragEvent) {
-  // relatedTarget 仍在本节点内时不清除
+/** 任务行：拖拽离开 */
+function onTaskRowDragLeave(e: DragEvent, task: Task) {
+  if (dragOverTaskId.value !== task.id) return;
+  const rt = e.relatedTarget as Node | null;
+  const current = e.currentTarget as HTMLElement;
+  if (current && rt && current.contains(rt)) return;
+  if (dragOverTaskId.value === task.id) {
+    dragOverTaskId.value = null;
+  }
+}
+
+/** 任务行：释放（同级排序） */
+async function onTaskRowDrop(e: DragEvent, task: Task, index: number) {
+  if (!draggingTaskId.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const taskId = draggingTaskId.value;
+  const targetGoalId = props.node.goal.id;
+  clearTaskDrag();
+
+  const draggedTask = findTaskInTree(taskId);
+  if (!draggedTask || draggedTask.id === task.id) return;
+
+  const pos = taskDropPosition.value;
+  if (pos === "before") {
+    // 插入到当前任务之前
+    await api.handleMoveTask(draggedTask, targetGoalId, task.id);
+  } else {
+    // 插入到当前任务之后：找下一个同级任务，插入其前；若为最后一个则追加末尾
+    const nextTask = props.node.tasks[index + 1];
+    if (nextTask && nextTask.id !== draggedTask.id) {
+      await api.handleMoveTask(draggedTask, targetGoalId, nextTask.id);
+    } else {
+      // 追加到末尾
+      await api.handleMoveTask(draggedTask, targetGoalId, null);
+    }
+  }
+}
+
+function clearTaskDrag() {
+  draggingTaskId.value = null;
+  dragOverTaskId.value = null;
+  dragOverGoalId.value = null;
+}
+
+// ===== 目标拖拽 =====
+
+/** 目标头部：开始拖拽 */
+function onGoalDragStart(e: DragEvent, goal: Goal) {
+  // 阻止从按钮区域启动拖拽
+  const target = e.target as HTMLElement;
+  if (target.closest(".n-button") || target.closest("button")) {
+    e.preventDefault();
+    return;
+  }
+  if (!e.dataTransfer) return;
+  e.dataTransfer.setData(GOAL_DRAG_MIME, goal.id);
+  e.dataTransfer.setData("text/plain", goal.id);
+  e.dataTransfer.effectAllowed = "move";
+  draggingGoal.value = goal;
+}
+
+/** 目标头部：结束拖拽 */
+function onGoalDragEnd() {
+  draggingGoal.value = null;
+  dragOverGoalId.value = null;
+}
+
+// ===== 目标卡片：统一放置区（任务 + 目标） =====
+
+/** 目标卡片：拖拽悬停 */
+function onCardDragOver(e: DragEvent) {
+  // 非本应用拖拽（如外部文件）：不阻止默认行为，显示禁止光标
+  if (!draggingTaskId.value && !draggingGoal.value) return;
+
+  // 阻止冒泡到父级放置区，确保只有最内层目标节点响应
+  e.stopPropagation();
+
+  // 任务拖拽悬停
+  if (draggingTaskId.value) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    // 自动展开目标
+    if (!expandedNodes.value.has(props.node.goal.id)) {
+      expandedNodes.value.add(props.node.goal.id);
+    }
+    dragOverGoalId.value = props.node.goal.id;
+    dropPosition.value = "inside";
+    return;
+  }
+
+  // 目标拖拽悬停
+  if (draggingGoal.value) {
+    const dragged = draggingGoal.value;
+    // 不能拖到自身或后代上
+    if (
+      dragged.id === props.node.goal.id ||
+      isDescendantOf(props.node.goal, dragged)
+    ) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    dragOverGoalId.value = props.node.goal.id;
+    // 三区检测：上 25%=before（插入上方），中 50%=inside（放入内部），下 25%=after（插入下方）
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    if (y < rect.height * 0.25) {
+      dropPosition.value = "before";
+    } else if (y > rect.height * 0.75) {
+      dropPosition.value = "after";
+    } else {
+      dropPosition.value = "inside";
+    }
+  }
+}
+
+/** 目标卡片：拖拽离开 */
+function onCardDragLeave(e: DragEvent) {
   if (dragOverGoalId.value !== props.node.goal.id) return;
   const rt = e.relatedTarget as Node | null;
-  const current = (e.currentTarget as HTMLElement)?.parentElement;
+  const current = e.currentTarget as HTMLElement;
   if (current && rt && current.contains(rt)) return;
   if (dragOverGoalId.value === props.node.goal.id) {
     dragOverGoalId.value = null;
@@ -131,22 +292,118 @@ function onGoalDragLeave(e: DragEvent) {
 }
 
 /** 目标卡片：释放 */
-async function onGoalDrop(e: DragEvent) {
-  e.preventDefault();
-  const taskId = draggingTaskId.value;
-  const targetGoalId = props.node.goal.id;
-  draggingTaskId.value = null;
-  dragOverGoalId.value = null;
-  if (!taskId) return;
+async function onCardDrop(e: DragEvent) {
+  // 非本应用拖拽：不处理
+  if (!draggingTaskId.value && !draggingGoal.value) return;
 
-  // 找到被拖拽的任务对象
-  const task = findTaskInTree(taskId);
-  if (!task) return;
-  if (task.goal_id === targetGoalId) return; // 同目标忽略
-  await api.handleMoveTask(task, targetGoalId);
+  e.preventDefault();
+  e.stopPropagation();
+
+  // ===== 任务释放到目标卡片 =====
+  if (draggingTaskId.value) {
+    const taskId = draggingTaskId.value;
+    const targetGoalId = props.node.goal.id;
+    const firstTask = props.node.tasks[0]; // 放置到最前面
+    clearTaskDrag();
+    const task = findTaskInTree(taskId);
+    if (!task || task.goal_id === targetGoalId) return;
+    // 1b: 放置到该目标直属任务列表最前面
+    await api.handleMoveTask(task, targetGoalId, firstTask?.id ?? null);
+    return;
+  }
+
+  // ===== 目标释放到目标卡片 =====
+  if (draggingGoal.value) {
+    const dragged = draggingGoal.value;
+    const target = props.node.goal;
+    clearGoalDrag();
+    if (dragged.id === target.id) return;
+    if (isDescendantOf(target, dragged)) return; // 环检测
+
+    const pos = dropPosition.value;
+    if (pos === "before") {
+      // 同级上方 → 插入到该目标之前（成为其同级）
+      await api.handleMoveGoal(dragged.id, target.parent_id, target.id);
+    } else if (pos === "after") {
+      // 同级下方 → 插入到该目标之后（成为其同级）
+      const nextSiblingId = api.findNextSiblingId(target.id);
+      if (nextSiblingId && nextSiblingId !== dragged.id) {
+        // 有下一个同级：插入到其前
+        await api.handleMoveGoal(dragged.id, target.parent_id, nextSiblingId);
+      } else {
+        // 无下一个同级或下一个是自身：追加到末尾
+        await api.handleMoveGoal(dragged.id, target.parent_id, null);
+      }
+    } else {
+      // inside
+      if (isAncestorOf(target, dragged)) {
+        // 拖到上级目标上 → 变为与该上级同级
+        await api.handleMoveGoal(dragged.id, target.parent_id, null);
+      } else {
+        // 拖到同级目标上 → 变为该目标的子目标
+        await api.handleMoveGoal(dragged.id, target.id, null);
+      }
+    }
+  }
 }
 
-/** 在整棵目标树中查找指定 ID 的任务（递归遍历本节点子树） */
+function clearGoalDrag() {
+  draggingGoal.value = null;
+  dragOverGoalId.value = null;
+}
+
+// ===== 视觉反馈计算 =====
+
+const isTaskDragOverInside = computed(
+  () =>
+    draggingTaskId.value &&
+    dragOverGoalId.value === props.node.goal.id &&
+    !dragOverTaskId.value,
+);
+
+const isGoalDragOverBefore = computed(
+  () =>
+    draggingGoal.value &&
+    dragOverGoalId.value === props.node.goal.id &&
+    dropPosition.value === "before",
+);
+
+const isGoalDragOverAfter = computed(
+  () =>
+    draggingGoal.value &&
+    dragOverGoalId.value === props.node.goal.id &&
+    dropPosition.value === "after",
+);
+
+const isGoalDragOverInside = computed(
+  () =>
+    draggingGoal.value &&
+    dragOverGoalId.value === props.node.goal.id &&
+    dropPosition.value === "inside",
+);
+
+function isTaskDropBefore(task: Task): boolean {
+  return (
+    draggingTaskId.value !== null &&
+    dragOverTaskId.value === task.id &&
+    taskDropPosition.value === "before"
+  );
+}
+
+function isTaskDropAfter(task: Task): boolean {
+  return (
+    draggingTaskId.value !== null &&
+    dragOverTaskId.value === task.id &&
+    taskDropPosition.value === "after"
+  );
+}
+
+const isDraggingThisGoal = computed(
+  () => draggingGoal.value?.id === props.node.goal.id,
+);
+
+// ===== 树内查找 =====
+
 function findTaskInTree(taskId: string): Task | null {
   for (const t of props.node.tasks) {
     if (t.id === taskId) return t;
@@ -171,18 +428,28 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
 </script>
 
 <template>
-  <div :class="level > 0 ? 'ml-3 pl-3 border-l border-gray-200' : ''">
-    <NCard
-      size="small"
-      :class="[level > 0 ? 'mt-1.5' : '', isDragOver ? 'drag-over' : '']"
-      @dragover="onGoalDragOver"
-      @dragleave="onGoalDragLeave"
-      @drop="onGoalDrop"
-    >
-      <!-- 节点头部 -->
+  <div
+    :class="[
+      level > 0 ? 'ml-3 pl-3 border-l border-gray-200' : '',
+      isDraggingThisGoal ? 'dragging-opacity' : '',
+      isTaskDragOverInside ? 'drop-inside-task' : '',
+      isGoalDragOverBefore ? 'drop-before-goal' : '',
+      isGoalDragOverAfter ? 'drop-after-goal' : '',
+      isGoalDragOverInside ? 'drop-inside-goal' : '',
+    ]"
+    @dragover="onCardDragOver"
+    @dragenter.prevent
+    @dragleave="onCardDragLeave"
+    @drop="onCardDrop"
+  >
+    <NCard size="small" :class="level > 0 ? 'mt-1.5' : ''">
+      <!-- 节点头部（可拖拽目标） -->
       <div
         class="flex items-center cursor-pointer justify-between"
         :class="isRoot ? 'gap-3' : 'gap-2'"
+        draggable="true"
+        @dragstart="onGoalDragStart($event, node.goal)"
+        @dragend="onGoalDragEnd"
         @click="toggle"
       >
         <Icon
@@ -322,17 +589,23 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
             直属任务
           </div>
           <div
-            v-for="task in node.tasks"
+            v-for="(task, idx) in node.tasks"
             :key="task.id"
             draggable="true"
             :class="[
               'flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-grab',
               'hover:bg-gray-50',
-              draggingTaskId === task.id ? 'dragging opacity-50' : '',
+              'task-row',
+              draggingTaskId === task.id ? 'dragging-opacity' : '',
+              isTaskDropBefore(task) ? 'task-drop-before' : '',
+              isTaskDropAfter(task) ? 'task-drop-after' : '',
             ]"
-            :title="`拖拽以移动到其他目标（当前归属：${node.goal.name}）`"
+            :title="`拖拽以移动或排序（当前归属：${node.goal.name}）`"
             @dragstart="onTaskDragStart($event, task)"
             @dragend="onTaskDragEnd"
+            @dragover="onTaskRowDragOver($event, task)"
+            @dragleave="onTaskRowDragLeave($event, task)"
+            @drop="onTaskRowDrop($event, task, idx)"
             @click.stop
           >
             <Icon
@@ -382,8 +655,13 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
 </template>
 
 <style scoped>
-/* 拖拽悬停时的目标卡片高亮 */
-:deep(.drag-over) {
+/* 被拖拽的目标：半透明 */
+.dragging-opacity {
+  opacity: 0.4;
+}
+
+/* 任务拖拽悬停在目标卡片上（放入内部） */
+.drop-inside-task {
   outline: 2px dashed #18a058;
   outline-offset: -2px;
   background-color: rgba(24, 160, 88, 0.04);
@@ -392,22 +670,43 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
     background-color 0.1s ease;
 }
 
-/* 被拖拽的任务行：半透明 + 占位虚线 */
-:deep(.dragging) {
-  opacity: 0.5;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 4px,
-    rgba(24, 160, 88, 0.1) 4px,
-    rgba(24, 160, 88, 0.1) 8px
-  );
+/* 目标拖拽悬停在上方（同级插入） */
+.drop-before-goal {
+  box-shadow: 0 -3px 0 0 #2080f0;
+  transition: box-shadow 0.1s ease;
+}
+
+/* 目标拖拽悬停在下方（同级插入） */
+.drop-after-goal {
+  box-shadow: 0 3px 0 0 #2080f0;
+  transition: box-shadow 0.1s ease;
+}
+
+/* 目标拖拽悬停在内部（放入为子目标） */
+.drop-inside-goal {
+  outline: 2px dashed #2080f0;
+  outline-offset: -2px;
+  background-color: rgba(32, 128, 240, 0.04);
+  transition:
+    outline 0.1s ease,
+    background-color 0.1s ease;
+}
+
+/* 任务行拖拽悬停在上方（插入之前） */
+.task-drop-before {
+  box-shadow: 0 -2px 0 0 #18a058;
+  transition: box-shadow 0.1s ease;
+}
+
+/* 任务行拖拽悬停在下方（插入之后） */
+.task-drop-after {
+  box-shadow: 0 2px 0 0 #18a058;
+  transition: box-shadow 0.1s ease;
 }
 
 /* 任务行拖拽手柄视觉 */
 [draggable="true"] {
   user-select: none;
-  -webkit-user-drag: element;
 }
 
 [draggable="true"]:active {

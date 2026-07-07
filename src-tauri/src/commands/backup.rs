@@ -47,6 +47,8 @@ pub async fn import_data(
     input: ImportInput,
     state: State<'_, DbPool>,
 ) -> AppResult<ImportResult> {
+    let mut tx = state.0.begin().await?;
+
     let data: ExportData = serde_json::from_str(&input.data)
         .map_err(|e| AppError::Param(format!("JSON 解析失败: {}", e)))?;
 
@@ -76,7 +78,7 @@ pub async fn import_data(
     for g in data.goals {
         let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM goals WHERE id = ?")
             .bind(&g.id)
-            .fetch_optional(&state.0)
+            .fetch_optional(&mut *tx)
             .await?
             .is_some();
 
@@ -116,32 +118,32 @@ pub async fn import_data(
                 .bind(&g.unit)
                 .bind(g.sort_order)
                 .bind(&g.created_at)
-                .execute(&state.0)
-                .await?;
-                result.goals_imported += 1;
-            }
-            _ => {
-                sqlx::query(
-                    "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&id)
-                .bind(&g.name)
-                .bind(&g.parent_id)
-                .bind(&g.path)
-                .bind(&g.deadline)
-                .bind(g.total_qty)
-                .bind(&g.unit)
-                .bind(g.sort_order)
-                .bind(&g.created_at)
-                .execute(&state.0)
-                .await?;
-                result.goals_imported += 1;
-                if mode == "rename" && id != g.id {
-                    goal_id_map.insert(g.id.clone(), id.clone());
-                }
-            }
+            .execute(&mut *tx)
+            .await?;
+        result.goals_imported += 1;
         }
+        _ => {
+        sqlx::query(
+            "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&g.name)
+        .bind(&g.parent_id)
+        .bind(&g.path)
+        .bind(&g.deadline)
+        .bind(g.total_qty)
+        .bind(&g.unit)
+        .bind(g.sort_order)
+        .bind(&g.created_at)
+        .execute(&mut *tx)
+        .await?;
+        result.goals_imported += 1;
+        if mode == "rename" && id != g.id {
+            goal_id_map.insert(g.id.clone(), id.clone());
+        }
+        }
+    }
     }
 
     // 导入 tasks（stages 已废弃，跳过）
@@ -154,7 +156,7 @@ pub async fn import_data(
 
         let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE id = ?")
             .bind(&t.id)
-            .fetch_optional(&state.0)
+            .fetch_optional(&mut *tx)
             .await?
             .is_some();
 
@@ -194,36 +196,36 @@ pub async fn import_data(
                 .bind(&t.source)
                 .bind(t.sort_order)
                 .bind(&t.created_at)
-                .execute(&state.0)
-                .await?;
-                result.tasks_imported += 1;
-            }
-            _ => {
-                sqlx::query(
-                    "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-                     plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&id)
-                .bind(&mapped_goal_id)
-                .bind(&t.stage_id)
-                .bind(&t.parent_id)
-                .bind(&t.path)
-                .bind(&t.name)
-                .bind(&t.plan_date)
-                .bind(t.plan_qty)
-                .bind(t.actual_qty)
-                .bind(&t.unit)
-                .bind(&t.status)
-                .bind(t.is_manual)
-                .bind(&t.source)
-                .bind(t.sort_order)
-                .bind(&t.created_at)
-                .execute(&state.0)
-                .await?;
-                result.tasks_imported += 1;
-            }
+            .execute(&mut *tx)
+            .await?;
+        result.tasks_imported += 1;
         }
+        _ => {
+        sqlx::query(
+            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&mapped_goal_id)
+        .bind(&t.stage_id)
+        .bind(&t.parent_id)
+        .bind(&t.path)
+        .bind(&t.name)
+        .bind(&t.plan_date)
+        .bind(t.plan_qty)
+        .bind(t.actual_qty)
+        .bind(&t.unit)
+        .bind(&t.status)
+        .bind(t.is_manual)
+        .bind(&t.source)
+        .bind(t.sort_order)
+        .bind(&t.created_at)
+        .execute(&mut *tx)
+        .await?;
+        result.tasks_imported += 1;
+        }
+    }
     }
 
     // 导入 encouragements（自定义鼓励语，预设不导入）
@@ -233,7 +235,7 @@ pub async fn import_data(
         }
         let exists: bool = sqlx::query_scalar::<_, i64>("SELECT 1 FROM encouragements WHERE id = ?")
             .bind(&e.id)
-            .fetch_optional(&state.0)
+            .fetch_optional(&mut *tx)
             .await?
             .is_some();
 
@@ -255,7 +257,7 @@ pub async fn import_data(
         .bind(&e.category)
         .bind(&e.level)
         .bind(&e.created_at)
-        .execute(&state.0)
+        .execute(&mut *tx)
         .await?;
         result.encouragements_imported += 1;
     }
@@ -268,10 +270,12 @@ pub async fn import_data(
         )
         .bind(&s.key)
         .bind(&s.value)
-        .execute(&state.0)
+        .execute(&mut *tx)
         .await?;
         result.settings_imported += 1;
     }
+
+    tx.commit().await?;
 
     Ok(result)
 }

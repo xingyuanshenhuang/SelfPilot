@@ -120,6 +120,31 @@ async function refresh() {
       </div>
     </NCard>
 
+    <!-- 今日待办 -->
+    <NCard :bordered="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <Icon icon="mdi:calendar-today" width="20" class="text-brand-500" />
+          <span>今日待办 ({{ today }})</span>
+        </div>
+      </template>
+      <template #header-extra>
+        <NButton size="small" quaternary @click="refresh">
+          <template #icon><Icon icon="mdi:refresh" /></template>
+          刷新
+        </NButton>
+      </template>
+      <div v-if="taskStore.todayTasks.length > 0" class="space-y-1">
+        <TaskItem
+          v-for="task in taskStore.todayTasks"
+          :key="task.id"
+          :task="task"
+          @completed="refresh"
+        />
+      </div>
+      <NEmpty v-else description="今日暂无待办任务" />
+    </NCard>
+
     <!-- 逾期任务 -->
     <NCard v-if="taskStore.overdueTasks.length > 0" :bordered="false">
       <template #header>
@@ -202,31 +227,6 @@ async function refresh() {
           @completed="refresh"
         />
       </div>
-    </NCard>
-
-    <!-- 今日待办 -->
-    <NCard :bordered="false">
-      <template #header>
-        <div class="flex items-center gap-2">
-          <Icon icon="mdi:calendar-today" width="20" class="text-brand-500" />
-          <span>今日待办 ({{ today }})</span>
-        </div>
-      </template>
-      <template #header-extra>
-        <NButton size="small" quaternary @click="refresh">
-          <template #icon><Icon icon="mdi:refresh" /></template>
-          刷新
-        </NButton>
-      </template>
-      <div v-if="taskStore.todayTasks.length > 0" class="space-y-1">
-        <TaskItem
-          v-for="task in taskStore.todayTasks"
-          :key="task.id"
-          :task="task"
-          @completed="refresh"
-        />
-      </div>
-      <NEmpty v-else description="今日暂无待办任务" />
     </NCard>
 
     <!-- 目标进度总览 -->
