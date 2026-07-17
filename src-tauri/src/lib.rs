@@ -47,6 +47,8 @@ pub fn run() {
             commands::goal::update_goal,
             commands::goal::delete_goal,
             commands::goal::auto_split,
+            commands::goal::split_by_capacity,
+            commands::goal::smart_split,
             commands::goal::repeat_split,
             commands::goal::replan_preview,
             commands::goal::replan_goal,
@@ -64,6 +66,13 @@ pub fn run() {
             commands::task::list_overdue_tasks,
             commands::task::list_tasks_by_goal,
             commands::task::list_tasks_by_date_range,
+            // 任务依赖（P1-1）
+            commands::task::set_task_dependency,
+            commands::task::list_task_dependencies,
+            commands::task::list_task_dependents,
+            commands::task::remove_task_dependency,
+            commands::task::validate_dependency_chain,
+            commands::task::list_task_dependency_records,
             // 进度相关
             commands::progress::get_goal_progress,
             commands::progress::get_all_goals_progress,

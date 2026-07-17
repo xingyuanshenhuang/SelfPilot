@@ -4,11 +4,11 @@ use uuid::Uuid;
 
 use crate::db::models::{
     CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
-    RepeatSplitInput, Task, UpdateGoalInput,
+    RepeatSplitInput, SmartSplitInput, Task, UpdateGoalInput,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
-use crate::services::{progress_service, split_service};
+use crate::services::{dependency_service, progress_service, split_service};
 
 /// 创建目标（总目标或子目标）
 ///
@@ -46,8 +46,8 @@ pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> Ap
     };
 
     sqlx::query(
-        "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at, daily_capacity)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.name)
@@ -58,6 +58,7 @@ pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> Ap
     .bind(&unit)
     .bind(sort_order)
     .bind(&now)
+    .bind(input.daily_capacity)
     .execute(&state.0)
     .await?;
 
@@ -180,6 +181,9 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     if input.unit.is_some() {
         updates.push("unit = ?".to_string());
     }
+    if input.daily_capacity.is_some() {
+        updates.push("daily_capacity = ?".to_string());
+    }
 
     if updates.is_empty() {
         return Err(AppError::Param("未提供任何更新字段".into()));
@@ -198,6 +202,9 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     }
     if let Some(unit) = &input.unit {
         q = q.bind(unit);
+    }
+    if let Some(cap) = input.daily_capacity {
+        q = q.bind(cap);
     }
     q = q.bind(&input.id);
     q.execute(&state.0).await?;
@@ -227,6 +234,20 @@ pub async fn delete_goal(id: String, state: State<'_, DbPool>) -> AppResult<()> 
             to_delete.push(child.clone());
             queue.push(child);
         }
+    }
+
+    // 清理依赖关系：任一端属于将被删除任务的依赖记录都删除
+    // SQLite 默认未启用外键级联，需显式清理 task_dependencies
+    for goal_id in &to_delete {
+        sqlx::query(
+            "DELETE FROM task_dependencies
+             WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)
+                OR depends_on_id IN (SELECT id FROM tasks WHERE goal_id = ?)",
+        )
+        .bind(goal_id)
+        .bind(goal_id)
+        .execute(&mut *tx)
+        .await?;
     }
 
     // 删除所有关联任务
@@ -283,8 +304,8 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
     for task in &tasks {
         sqlx::query(
             "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id)
         .bind(&task.goal_id)
@@ -301,6 +322,73 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
         .bind(&task.source)
         .bind(task.sort_order)
         .bind(&task.created_at)
+        .bind(task.estimated_hours)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(tasks)
+}
+
+/// 按时间预算拆解目标为每日任务（P1-3 时间预算模型）
+///
+/// 与 `auto_split` 不同，此命令按 `goal.daily_capacity`（每日可用时长）决定每个任务的计划量，
+/// 而非按剩余天数平均分配总量。
+/// - 任务数 = ceil(total_qty / daily_capacity)
+/// - 每个任务 plan_qty = daily_capacity（最后一个可能不足）
+/// - 每个任务 estimated_hours = daily_capacity
+/// - 任务从明天开始，逐日生成，每天一个任务
+#[tauri::command]
+pub async fn split_by_capacity(goal_id: String, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    let mut tx = state.0.begin().await?;
+
+    let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(&goal_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+
+    // 检查是否已有自动拆解任务，避免重复
+    let existing: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND source = 'auto'")
+            .bind(&goal_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    if existing > 0 {
+        return Err(AppError::Business(
+            "该目标已有自动拆解任务，请先删除旧任务再重新拆解".into(),
+        ));
+    }
+
+    // 执行按时间预算拆解算法
+    let today = chrono::Local::now().date_naive();
+    let tasks = split_service::split_by_daily_capacity(&goal, today)?;
+
+    // 批量插入任务
+    for task in &tasks {
+        sqlx::query(
+            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&task.id)
+        .bind(&task.goal_id)
+        .bind(&task.stage_id)
+        .bind(&task.parent_id)
+        .bind(&task.path)
+        .bind(&task.name)
+        .bind(&task.plan_date)
+        .bind(task.plan_qty)
+        .bind(task.actual_qty)
+        .bind(&task.unit)
+        .bind(&task.status)
+        .bind(task.is_manual)
+        .bind(&task.source)
+        .bind(task.sort_order)
+        .bind(&task.created_at)
+        .bind(task.estimated_hours)
         .execute(&mut *tx)
         .await?;
     }
@@ -329,8 +417,8 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
     for task in &tasks {
         sqlx::query(
             "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id)
         .bind(&task.goal_id)
@@ -347,6 +435,69 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(&task.source)
         .bind(task.sort_order)
         .bind(&task.created_at)
+        .bind(task.estimated_hours)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(tasks)
+}
+
+/// 智能拆解（整合入口：按截止日期均分 / 按时间预算 / 自定义日期范围）
+///
+/// 三种策略统一入口，参数可临时覆盖目标属性（不修改目标本身）。
+/// 详见 `split_service::smart_split`。
+#[tauri::command]
+pub async fn smart_split(input: SmartSplitInput, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    let mut tx = state.0.begin().await?;
+
+    let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(&input.goal_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
+
+    // 检查是否已有自动拆解任务，避免重复
+    let existing: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE goal_id = ? AND source = 'auto'")
+            .bind(&input.goal_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    if existing > 0 {
+        return Err(AppError::Business(
+            "该目标已有自动拆解任务，请先删除旧任务再重新拆解".into(),
+        ));
+    }
+
+    // 执行智能拆解（根据策略分发到对应算法）
+    let today = chrono::Local::now().date_naive();
+    let tasks = split_service::smart_split(&input, &goal, today)?;
+
+    // 批量插入任务
+    for task in &tasks {
+        sqlx::query(
+            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&task.id)
+        .bind(&task.goal_id)
+        .bind(&task.stage_id)
+        .bind(&task.parent_id)
+        .bind(&task.path)
+        .bind(&task.name)
+        .bind(&task.plan_date)
+        .bind(task.plan_qty)
+        .bind(task.actual_qty)
+        .bind(&task.unit)
+        .bind(&task.status)
+        .bind(task.is_manual)
+        .bind(&task.source)
+        .bind(task.sort_order)
+        .bind(&task.created_at)
+        .bind(task.estimated_hours)
         .execute(&mut *tx)
         .await?;
     }
@@ -372,13 +523,17 @@ pub async fn replan_preview(goal_id: String, state: State<'_, DbPool>) -> AppRes
     .await?;
 
     let today = chrono::Local::now().date_naive();
-    let preview = split_service::build_replan_preview(&goal, &unfinished, today)?;
+    let dep_map = dependency_service::load_goal_dependency_map(&state.0, &goal_id).await?;
+    let preview = split_service::build_replan_preview(&goal, &unfinished, today, &dep_map)?;
     Ok(preview)
 }
 
 /// 执行重新规划
 #[tauri::command]
 pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult<ReplanResult> {
+    // 在事务前查询依赖映射（基于已提交数据，本地单用户场景无竞态）
+    let dep_map = dependency_service::load_goal_dependency_map(&state.0, &goal_id).await?;
+
     let mut tx = state.0.begin().await?;
 
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
@@ -395,7 +550,7 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
     .await?;
 
     let today = chrono::Local::now().date_naive();
-    let preview = split_service::build_replan_preview(&goal, &unfinished, today)?;
+    let preview = split_service::build_replan_preview(&goal, &unfinished, today, &dep_map)?;
 
     let mut updated_count = 0usize;
     let mut retained_count = 0usize;

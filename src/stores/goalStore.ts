@@ -7,6 +7,8 @@ import type {
   CreateGoalInput,
   ProgressInfo,
   GoalTreeNode,
+  SmartSplitInput,
+  Task,
 } from "@/types";
 
 export const useGoalStore = defineStore("goal", () => {
@@ -52,7 +54,26 @@ export const useGoalStore = defineStore("goal", () => {
     return tasks;
   }
 
-  async function repeatSplit(goalId: string, name: string, startDate: string, endDate?: string | null) {
+  /** P1-3：按时间预算拆解（按每日可用时长分配任务） */
+  async function splitByCapacity(goalId: string) {
+    const tasks = await goalApi.splitByCapacity(goalId);
+    await fetchProgresses();
+    return tasks;
+  }
+
+  /** 智能拆解（整合入口：按截止日期均分 / 按时间预算 / 自定义日期范围） */
+  async function smartSplit(input: SmartSplitInput): Promise<Task[]> {
+    const tasks = await goalApi.smartSplit(input);
+    await fetchProgresses();
+    return tasks;
+  }
+
+  async function repeatSplit(
+    goalId: string,
+    name: string,
+    startDate: string,
+    endDate?: string | null,
+  ) {
     const tasks = await goalApi.repeatSplit({
       goal_id: goalId,
       name,
@@ -78,6 +99,8 @@ export const useGoalStore = defineStore("goal", () => {
     createGoal,
     deleteGoal,
     autoSplit,
+    splitByCapacity,
+    smartSplit,
     repeatSplit,
     getProgress,
   };

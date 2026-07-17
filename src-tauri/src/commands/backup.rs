@@ -25,12 +25,18 @@ pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
         .fetch_all(&state.0)
         .await?;
 
+    let task_dependencies: Vec<crate::db::models::TaskDependency> =
+        sqlx::query_as("SELECT * FROM task_dependencies ORDER BY created_at")
+            .fetch_all(&state.0)
+            .await?;
+
     let data = ExportData {
-        version: "2.0".to_string(),
+        version: "2.1".to_string(),
         exported_at: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
         goals,
         stages: vec![], // 已废弃，保留字段兼容旧备份
         tasks,
+        task_dependencies,
         encouragements,
         settings,
     };
@@ -67,12 +73,15 @@ pub async fn import_data(
         stages_skipped: 0,
         tasks_imported: 0,
         tasks_skipped: 0,
+        dependencies_imported: 0,
+        dependencies_skipped: 0,
         encouragements_imported: 0,
         settings_imported: 0,
     };
 
     use std::collections::HashMap;
     let mut goal_id_map: HashMap<String, String> = HashMap::new();
+    let mut task_id_map: HashMap<String, String> = HashMap::new();
 
     // 导入 goals
     for g in data.goals {
@@ -168,6 +177,9 @@ pub async fn import_data(
             _ => (t.id.clone(), "skip"),
         };
 
+        // 记录任务 ID 映射：依赖关系中的原始 task_id / depends_on_id 需要映射到导入后的 ID
+        task_id_map.insert(t.id.clone(), id.clone());
+
         match action {
             "skip" => {
                 result.tasks_skipped += 1;
@@ -226,6 +238,67 @@ pub async fn import_data(
         result.tasks_imported += 1;
         }
     }
+    }
+
+    // 导入 task_dependencies（P1-1）
+    // 前置条件：tasks 已经导入完成，task_id_map 已建立
+    for d in data.task_dependencies {
+        let mapped_task_id = task_id_map.get(&d.task_id).cloned().unwrap_or(d.task_id.clone());
+        let mapped_dep_id = task_id_map
+            .get(&d.depends_on_id)
+            .cloned()
+            .unwrap_or(d.depends_on_id.clone());
+
+        // 若任一端任务被跳过（不存在于当前库），则跳过该依赖，避免外键错误
+        let task_exists: bool =
+            sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE id = ?")
+                .bind(&mapped_task_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+        let dep_exists: bool =
+            sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE id = ?")
+                .bind(&mapped_dep_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+
+        if !task_exists || !dep_exists {
+            result.dependencies_skipped += 1;
+            continue;
+        }
+
+        let exists: bool =
+            sqlx::query_scalar::<_, i64>("SELECT 1 FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?")
+                .bind(&mapped_task_id)
+                .bind(&mapped_dep_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+
+        if exists && mode == "skip" {
+            result.dependencies_skipped += 1;
+            continue;
+        }
+
+        let id = if exists && mode == "rename" {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            d.id.clone()
+        };
+
+        sqlx::query(
+            "INSERT INTO task_dependencies (id, task_id, depends_on_id, created_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(task_id, depends_on_id) DO UPDATE SET created_at=excluded.created_at",
+        )
+        .bind(&id)
+        .bind(&mapped_task_id)
+        .bind(&mapped_dep_id)
+        .bind(&d.created_at)
+        .execute(&mut *tx)
+        .await?;
+        result.dependencies_imported += 1;
     }
 
     // 导入 encouragements（自定义鼓励语，预设不导入）

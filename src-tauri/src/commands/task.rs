@@ -1,9 +1,13 @@
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::models::{CalendarTask, CompleteTaskInput, CreateTaskInput, Goal, MoveTaskInput, Task, TodayTask, UpdateTaskInput};
+use crate::db::models::{
+    CalendarTask, CompleteTaskInput, CreateTaskInput, Goal, MoveTaskInput, SetTaskDependencyInput,
+    Task, TaskDependency, TodayTask, UpdateTaskInput,
+};
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+use crate::services::dependency_service;
 
 /// 手动创建任务
 #[tauri::command]
@@ -16,8 +20,8 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
 
     sqlx::query(
         "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-         plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.goal_id)
@@ -34,6 +38,7 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
     .bind("manual")
     .bind(0)
     .bind(&now)
+    .bind(None::<f64>)
     .execute(&state.0)
     .await?;
 
@@ -69,6 +74,11 @@ pub async fn complete_task(
     // 禁止对已完成任务再次标记完成
     if task.status == "done" {
         return Err(AppError::Business("任务已完成，不能重复标记".into()));
+    }
+
+    // P1-1：存在未完成的前置依赖时禁止完成
+    if dependency_service::has_unfinished_dependencies(&state.0, &input.task_id).await? {
+        return Err(AppError::Business("前置任务未完成，暂不能标记完成".into()));
     }
 
     // 校验不超过计划数量
@@ -133,12 +143,18 @@ pub async fn list_today_tasks(state: State<'_, DbPool>) -> AppResult<Vec<TodayTa
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     let tasks: Vec<TodayTask> = sqlx::query_as(
-        "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
-                t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
-         FROM tasks t
-         JOIN goals g ON t.goal_id = g.id
-         WHERE t.plan_date = ? AND t.status != 'skipped'
-         ORDER BY t.sort_order",
+        &format!(
+            "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
+                    t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source,
+                    {} as is_blocked,
+                    {} as blocked_by_names
+             FROM tasks t
+             JOIN goals g ON t.goal_id = g.id
+             WHERE t.plan_date = ? AND t.status != 'skipped'
+             ORDER BY t.sort_order",
+            dependency_service::BLOCKED_EXISTS_SQL,
+            dependency_service::BLOCKED_BY_NAMES_SQL
+        ),
     )
     .bind(&today)
     .fetch_all(&state.0)
@@ -158,12 +174,18 @@ pub async fn list_overdue_tasks(state: State<'_, DbPool>) -> AppResult<Vec<Today
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     let mut tasks: Vec<TodayTask> = sqlx::query_as(
-        "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
-                t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source
-         FROM tasks t
-         JOIN goals g ON t.goal_id = g.id
-         WHERE t.plan_date < ? AND t.status IN ('pending', 'partial')
-         ORDER BY COALESCE(t.overdue_date, t.plan_date), t.plan_date",
+        &format!(
+            "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
+                    t.plan_date, t.overdue_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source,
+                    {} as is_blocked,
+                    {} as blocked_by_names
+             FROM tasks t
+             JOIN goals g ON t.goal_id = g.id
+             WHERE t.plan_date < ? AND t.status IN ('pending', 'partial')
+             ORDER BY COALESCE(t.overdue_date, t.plan_date), t.plan_date",
+            dependency_service::BLOCKED_EXISTS_SQL,
+            dependency_service::BLOCKED_BY_NAMES_SQL
+        ),
     )
     .bind(&today)
     .fetch_all(&state.0)
@@ -227,6 +249,11 @@ pub async fn backfill_task(
     // 已完成且补完成量不超过原完成量时禁止重复标记
     if task.status == "done" && input.actual_qty <= task.actual_qty {
         return Err(AppError::Business("任务已完成，不能重复补录".into()));
+    }
+
+    // P1-1：存在未完成的前置依赖时禁止补完成
+    if dependency_service::has_unfinished_dependencies(&state.0, &input.task_id).await? {
+        return Err(AppError::Business("前置任务未完成，暂不能补完成".into()));
     }
 
     // 补完成允许超过原计划数量（用户可能补录超额完成）
@@ -497,12 +524,26 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
 }
 
 /// 删除任务
+///
+/// 同时清理该任务相关的依赖关系（作为前置或后继）。
+/// SQLite 默认未启用外键级联，需显式删除 task_dependencies。
 #[tauri::command]
 pub async fn delete_task(task_id: String, state: State<'_, DbPool>) -> AppResult<()> {
+    let mut tx = state.0.begin().await?;
+
+    // 清理依赖：删除该任务作为 task_id 或 depends_on_id 的所有记录
+    sqlx::query("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?")
+        .bind(&task_id)
+        .bind(&task_id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM tasks WHERE id = ?")
         .bind(&task_id)
-        .execute(&state.0)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
@@ -521,14 +562,20 @@ pub async fn list_tasks_by_date_range(
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     let mut tasks: Vec<CalendarTask> = sqlx::query_as(
-        "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
-                t.plan_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source,
-                0 as is_overdue
-         FROM tasks t
-         JOIN goals g ON t.goal_id = g.id
-         WHERE t.plan_date IS NOT NULL
-           AND t.plan_date >= ? AND t.plan_date <= ?
-         ORDER BY t.plan_date, t.sort_order",
+        &format!(
+            "SELECT t.id, t.goal_id, g.name as goal_name, t.stage_id, t.name,
+                    t.plan_date, t.plan_qty, t.actual_qty, t.unit, t.status, t.source,
+                    0 as is_overdue,
+                    {} as is_blocked,
+                    {} as blocked_by_names
+             FROM tasks t
+             JOIN goals g ON t.goal_id = g.id
+             WHERE t.plan_date IS NOT NULL
+               AND t.plan_date >= ? AND t.plan_date <= ?
+             ORDER BY t.plan_date, t.sort_order",
+            dependency_service::BLOCKED_EXISTS_SQL,
+            dependency_service::BLOCKED_BY_NAMES_SQL
+        ),
     )
     .bind(&start_date)
     .bind(&end_date)
@@ -547,4 +594,122 @@ pub async fn list_tasks_by_date_range(
     }
 
     Ok(tasks)
+}
+
+// ===== P1-1 任务依赖关系 =====
+
+/// 设置任务依赖（task_id 依赖 depends_on_id）
+///
+/// 业务规则：
+/// - 校验两个任务均存在
+/// - 禁止自依赖
+/// - 通过 DFS 检测防止循环依赖
+/// - 重复依赖静默忽略（INSERT OR IGNORE）
+#[tauri::command]
+pub async fn set_task_dependency(
+    input: SetTaskDependencyInput,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    if input.task_id == input.depends_on_id {
+        return Err(AppError::Param("任务不能依赖自身".into()));
+    }
+
+    // 校验两个任务均存在
+    let _task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+        .bind(&input.task_id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+    let _dep: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+        .bind(&input.depends_on_id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("前置任务 {} 不存在", input.depends_on_id)))?;
+
+    // 环检测：添加该依赖是否会形成循环
+    if dependency_service::detect_cycle(&state.0, &input.task_id, &input.depends_on_id).await? {
+        return Err(AppError::Business(
+            "添加该依赖会形成循环依赖，已拒绝".into(),
+        ));
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    // 重复依赖静默忽略
+    sqlx::query(
+        "INSERT OR IGNORE INTO task_dependencies (id, task_id, depends_on_id, created_at)
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&input.task_id)
+    .bind(&input.depends_on_id)
+    .bind(&now)
+    .execute(&state.0)
+    .await?;
+
+    Ok(())
+}
+
+/// 列出某任务的直接前置依赖任务
+#[tauri::command]
+pub async fn list_task_dependencies(
+    task_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Vec<Task>> {
+    let tasks = dependency_service::list_dependencies(&state.0, &task_id).await?;
+    Ok(tasks)
+}
+
+/// 列出依赖某任务的后继任务（哪些任务依赖 task_id）
+#[tauri::command]
+pub async fn list_task_dependents(
+    task_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Vec<Task>> {
+    let tasks = dependency_service::list_dependents(&state.0, &task_id).await?;
+    Ok(tasks)
+}
+
+/// 移除任务依赖
+#[tauri::command]
+pub async fn remove_task_dependency(
+    task_id: String,
+    depends_on_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?")
+        .bind(&task_id)
+        .bind(&depends_on_id)
+        .execute(&state.0)
+        .await?;
+    Ok(())
+}
+
+/// 校验依赖链无环（添加 task_id 依赖 depends_on_id 是否会形成循环）
+///
+/// 返回 true 表示安全（无环），false 表示会形成循环。
+#[tauri::command]
+pub async fn validate_dependency_chain(
+    task_id: String,
+    depends_on_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<bool> {
+    let has_cycle =
+        dependency_service::detect_cycle(&state.0, &task_id, &depends_on_id).await?;
+    Ok(!has_cycle)
+}
+
+/// 列出某任务的所有依赖记录（含 id、created_at）
+#[tauri::command]
+pub async fn list_task_dependency_records(
+    task_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Vec<TaskDependency>> {
+    let records: Vec<TaskDependency> = sqlx::query_as(
+        "SELECT * FROM task_dependencies WHERE task_id = ? ORDER BY created_at",
+    )
+    .bind(&task_id)
+    .fetch_all(&state.0)
+    .await?;
+    Ok(records)
 }

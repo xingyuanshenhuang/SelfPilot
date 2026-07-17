@@ -44,6 +44,8 @@ pub struct Goal {
     pub unit: String,
     pub sort_order: i64,
     pub created_at: String,
+    /// P1-3：每日可用时长（按时间预算拆解时使用，None=未设置）
+    pub daily_capacity: Option<f64>,
 }
 
 /// 创建目标的输入参数
@@ -55,6 +57,9 @@ pub struct CreateGoalInput {
     pub deadline: Option<String>,
     pub total_qty: Option<f64>,
     pub unit: Option<String>,
+    /// P1-3：每日可用时长（按时间预算拆解时使用）
+    #[serde(default)]
+    pub daily_capacity: Option<f64>,
 }
 
 /// 更新目标的输入参数
@@ -65,6 +70,9 @@ pub struct UpdateGoalInput {
     pub deadline: Option<String>,
     pub total_qty: Option<f64>,
     pub unit: Option<String>,
+    /// P1-3：每日可用时长（按时间预算拆解时使用）
+    #[serde(default)]
+    pub daily_capacity: Option<f64>,
 }
 
 /// 重复拆解输入（纯文字类任务：按频率重复 or 单次）
@@ -87,6 +95,39 @@ pub struct RepeatSplitInput {
     /// 每月几号（1-31），仅 monthly 有效
     #[serde(default)]
     pub month_days: Option<Vec<u8>>,
+}
+
+/// 智能拆解输入（整合视频拆解与时间预算拆解的统一入口）
+///
+/// 三种策略：
+/// - `by_deadline`：按截止日期均分（总量 ÷ 剩余天数），保留原 auto_split 能力
+/// - `by_capacity`：按时间预算（每日可用时长决定任务量），保留原 split_by_capacity 能力
+/// - `by_date_range`：自定义日期范围（指定起止日期，可选每日数量）
+///
+/// 所有参数可选字段均用于临时覆盖目标自身属性，不修改目标本身。
+#[derive(Debug, Clone, Deserialize)]
+pub struct SmartSplitInput {
+    pub goal_id: String,
+    /// 拆解策略：by_deadline | by_capacity | by_date_range
+    pub strategy: String,
+    /// 总量（可选，默认用 goal.total_qty）
+    #[serde(default)]
+    pub total_qty: Option<f64>,
+    /// 截止日期 yyyy-MM-dd（by_deadline / by_capacity 用，默认用 goal.deadline）
+    #[serde(default)]
+    pub deadline: Option<String>,
+    /// 每日可用时长（by_capacity 必填）
+    #[serde(default)]
+    pub daily_capacity: Option<f64>,
+    /// 起始日期 yyyy-MM-dd（by_date_range 用，默认明天）
+    #[serde(default)]
+    pub start_date: Option<String>,
+    /// 结束日期 yyyy-MM-dd（by_date_range 用）
+    #[serde(default)]
+    pub end_date: Option<String>,
+    /// 每日数量（by_date_range 可选；不填则按天数均分总量）
+    #[serde(default)]
+    pub per_day_qty: Option<f64>,
 }
 
 /// 目标树节点（含子目标和子任务）
@@ -176,6 +217,8 @@ pub struct Task {
     pub source: String,
     pub sort_order: i64,
     pub created_at: String,
+    /// P1-3：预估时长（小时），按时间预算拆解时自动填充
+    pub estimated_hours: Option<f64>,
 }
 
 /// 创建任务的输入参数
@@ -238,6 +281,10 @@ pub struct TodayTask {
     pub unit: String,
     pub status: String,
     pub source: String,
+    /// 是否被依赖阻塞（存在未完成的前置依赖），由查询层通过子查询填充
+    pub is_blocked: bool,
+    /// 阻塞本任务的前置任务名称列表（顿号分隔），仅 is_blocked=true 时有值
+    pub blocked_by_names: Option<String>,
 }
 
 /// 重新规划预览项：展示某任务变更前后的计划数量
@@ -323,6 +370,10 @@ pub struct CalendarTask {
     pub source: String,
     /// 是否逾期（plan_date < today 且未完成），由命令层填充
     pub is_overdue: bool,
+    /// 是否被依赖阻塞（存在未完成的前置依赖），由查询层通过子查询填充
+    pub is_blocked: bool,
+    /// 阻塞本任务的前置任务名称列表（顿号分隔），仅 is_blocked=true 时有值
+    pub blocked_by_names: Option<String>,
 }
 
 /// 每日完成趋势项
@@ -416,6 +467,9 @@ pub struct ExportData {
     pub goals: Vec<Goal>,
     pub stages: Vec<Stage>,
     pub tasks: Vec<Task>,
+    /// P1-1：任务依赖关系（兼容旧备份：缺失时默认为空数组）
+    #[serde(default)]
+    pub task_dependencies: Vec<TaskDependency>,
     pub encouragements: Vec<Encouragement>,
     pub settings: Vec<Setting>,
 }
@@ -438,6 +492,8 @@ pub struct ImportResult {
     pub stages_skipped: usize,
     pub tasks_imported: usize,
     pub tasks_skipped: usize,
+    pub dependencies_imported: usize,
+    pub dependencies_skipped: usize,
     pub encouragements_imported: usize,
     pub settings_imported: usize,
 }
@@ -495,4 +551,24 @@ pub struct CompletionPrediction {
     pub status: String,
     /// 建议文案
     pub suggestion: String,
+}
+
+/// 任务依赖关系（P1-1）
+///
+/// 表示 task_id 依赖 depends_on_id：depends_on_id 完成后 task_id 才可执行。
+/// 防循环依赖由 `set_task_dependency` 命令通过 DFS 检测。
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TaskDependency {
+    pub id: String,
+    pub task_id: String,
+    pub depends_on_id: String,
+    pub created_at: String,
+}
+
+/// 设置任务依赖输入
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetTaskDependencyInput {
+    pub task_id: String,
+    /// 前置任务 ID（task_id 依赖此任务）
+    pub depends_on_id: String,
 }

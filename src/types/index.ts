@@ -11,6 +11,8 @@ export interface Goal {
   unit: string;
   sort_order: number;
   created_at: string;
+  /** P1-3：每日可用时长（按时间预算拆解时使用，null=未设置） */
+  daily_capacity: number | null;
 }
 
 export interface CreateGoalInput {
@@ -20,6 +22,8 @@ export interface CreateGoalInput {
   deadline?: string | null;
   total_qty?: number;
   unit?: string;
+  /** P1-3：每日可用时长（按时间预算拆解时使用） */
+  daily_capacity?: number | null;
 }
 
 export interface UpdateGoalInput {
@@ -28,6 +32,8 @@ export interface UpdateGoalInput {
   deadline?: string | null;
   total_qty?: number;
   unit?: string;
+  /** P1-3：每日可用时长（按时间预算拆解时使用） */
+  daily_capacity?: number | null;
 }
 
 /** 重复拆解输入（纯文字类任务） */
@@ -46,6 +52,28 @@ export interface RepeatSplitInput {
   weekdays?: number[];
   /** 每月几号（1-31），仅 monthly 有效 */
   month_days?: number[];
+}
+
+/** 智能拆解策略 */
+export type SplitStrategy = "by_deadline" | "by_capacity" | "by_date_range";
+
+/** 智能拆解输入（整合视频拆解与时间预算拆解的统一入口） */
+export interface SmartSplitInput {
+  goal_id: string;
+  /** 拆解策略 */
+  strategy: SplitStrategy;
+  /** 总量（可选，默认用 goal.total_qty） */
+  total_qty?: number | null;
+  /** 截止日期 yyyy-MM-dd（by_deadline / by_capacity 用，默认用 goal.deadline） */
+  deadline?: string | null;
+  /** 每日可用时长（by_capacity 必填） */
+  daily_capacity?: number | null;
+  /** 起始日期 yyyy-MM-dd（by_date_range 用，默认明天） */
+  start_date?: string | null;
+  /** 结束日期 yyyy-MM-dd（by_date_range 用） */
+  end_date?: string | null;
+  /** 每日数量（by_date_range 可选；不填则按天数均分总量） */
+  per_day_qty?: number | null;
 }
 
 /** 目标树节点 */
@@ -75,6 +103,8 @@ export interface Task {
   source: "auto" | "manual";
   sort_order: number;
   created_at: string;
+  /** P1-3：预估时长（小时），按时间预算拆解时自动填充 */
+  estimated_hours: number | null;
 }
 
 export interface CreateTaskInput {
@@ -124,6 +154,10 @@ export interface TodayTask {
   unit: string;
   status: TaskStatus;
   source: "auto" | "manual";
+  /** 是否被依赖阻塞（存在未完成的前置依赖） */
+  is_blocked: boolean;
+  /** 阻塞本任务的前置任务名称列表（顿号分隔），仅 is_blocked=true 时有值 */
+  blocked_by_names: string | null;
 }
 
 export type TaskStatus = "pending" | "partial" | "done" | "skipped";
@@ -215,6 +249,10 @@ export interface CalendarTask {
   source: "auto" | "manual";
   /** 是否逾期（plan_date < today 且未完成） */
   is_overdue: boolean;
+  /** 是否被依赖阻塞（存在未完成的前置依赖） */
+  is_blocked: boolean;
+  /** 阻塞本任务的前置任务名称列表（顿号分隔），仅 is_blocked=true 时有值 */
+  blocked_by_names: string | null;
 }
 
 /** 每日完成趋势项 */
@@ -370,4 +408,19 @@ export interface CompletionPrediction {
   status: PredictionStatus;
   /** 建议文案 */
   suggestion: string;
+}
+
+/** 任务依赖关系（P1-1）：task_id 依赖 depends_on_id */
+export interface TaskDependency {
+  id: string;
+  task_id: string;
+  depends_on_id: string;
+  created_at: string;
+}
+
+/** 设置任务依赖输入 */
+export interface SetTaskDependencyInput {
+  task_id: string;
+  /** 前置任务 ID（task_id 依赖此任务） */
+  depends_on_id: string;
 }

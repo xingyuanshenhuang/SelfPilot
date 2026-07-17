@@ -14,7 +14,8 @@ export interface GoalTreeApi {
   openCreateGoalModal: (parentId: string | null) => void;
   openCreateTaskModal: (goalId: string) => void;
   openEditGoalModal: (goal: Goal) => void;
-  handleAutoSplit: (goal: Goal) => void;
+  /** 打开自动拆解配置弹窗（整合视频拆解与时间预算拆解） */
+  openSplitModal: (goal: Goal) => void;
   handleReplanPreview: (goal: Goal) => void;
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
@@ -48,6 +49,10 @@ export interface GoalTreeApi {
   taskDropPosition: Ref<"before" | "after">;
   /** 查找目标的下一个同级目标 ID（用于目标拖拽插入下方） */
   findNextSiblingId: (goalId: string) => string | null;
+  /** 在整棵目标树中查找任务（跨目标拖拽时定位被拖任务对象） */
+  findTaskInTree: (taskId: string) => Task | null;
+  /** 清空任务拖拽共享状态（draggingTaskId / dragOverTaskId / dragOverGoalId） */
+  clearTaskDrag: () => void;
 }
 
 /** provide/inject 键 */
@@ -67,10 +72,9 @@ import {
   NTag,
   NPopconfirm,
   NProgress,
-  NDropdown,
+  NTooltip,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
-import { STATUS_META } from "@/types";
 import type { GoalTreeNode } from "@/types";
 
 const props = withDefaults(
@@ -105,17 +109,13 @@ function toggle() {
   toggleNode(props.node.goal.id);
 }
 
-function onTaskSelect(key: string, task: Task) {
-  api.handleTaskAction(key, task);
-}
-
 // ===== 共享拖拽状态 =====
+// 注：taskDropPosition 已迁移至 TaskList.vue（仅任务行排序使用）
 const draggingTaskId = api.draggingTaskId;
 const draggingGoal = api.draggingGoal;
 const dragOverGoalId = api.dragOverGoalId;
 const dropPosition = api.dropPosition;
 const dragOverTaskId = api.dragOverTaskId;
-const taskDropPosition = api.taskDropPosition;
 
 // ===== 路径工具：判断祖先/后代关系（用于环检测） =====
 
@@ -131,81 +131,7 @@ function isAncestorOf(target: Goal, dragged: Goal): boolean {
   return dragged.path.startsWith(target.path + "/");
 }
 
-// ===== 任务拖拽 =====
-
-/** 任务行：开始拖拽 */
-function onTaskDragStart(e: DragEvent, task: Task) {
-  if (!e.dataTransfer) return;
-  e.dataTransfer.setData(TASK_DRAG_MIME, task.id);
-  e.dataTransfer.setData("text/plain", task.id);
-  e.dataTransfer.effectAllowed = "move";
-  draggingTaskId.value = task.id;
-}
-
-/** 任务行：结束拖拽 */
-function onTaskDragEnd() {
-  draggingTaskId.value = null;
-  dragOverTaskId.value = null;
-  dragOverGoalId.value = null;
-}
-
-/** 任务行：拖拽悬停（用于同级排序） */
-function onTaskRowDragOver(e: DragEvent, task: Task) {
-  if (!draggingTaskId.value) return;
-  e.preventDefault();
-  e.stopPropagation(); // 阻止冒泡到目标卡片
-  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-  dragOverTaskId.value = task.id;
-  // 上半部 = before，下半部 = after
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  taskDropPosition.value =
-    e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-}
-
-/** 任务行：拖拽离开 */
-function onTaskRowDragLeave(e: DragEvent, task: Task) {
-  if (dragOverTaskId.value !== task.id) return;
-  const rt = e.relatedTarget as Node | null;
-  const current = e.currentTarget as HTMLElement;
-  if (current && rt && current.contains(rt)) return;
-  if (dragOverTaskId.value === task.id) {
-    dragOverTaskId.value = null;
-  }
-}
-
-/** 任务行：释放（同级排序） */
-async function onTaskRowDrop(e: DragEvent, task: Task, index: number) {
-  if (!draggingTaskId.value) return;
-  e.preventDefault();
-  e.stopPropagation();
-  const taskId = draggingTaskId.value;
-  const targetGoalId = props.node.goal.id;
-  clearTaskDrag();
-
-  const draggedTask = findTaskInTree(taskId);
-  if (!draggedTask || draggedTask.id === task.id) return;
-
-  const pos = taskDropPosition.value;
-  if (pos === "before") {
-    // 插入到当前任务之前
-    await api.handleMoveTask(draggedTask, targetGoalId, task.id);
-  } else {
-    // 插入到当前任务之后：找下一个同级任务，插入其前；若为最后一个则追加末尾
-    const nextTask = props.node.tasks[index + 1];
-    if (nextTask && nextTask.id !== draggedTask.id) {
-      await api.handleMoveTask(draggedTask, targetGoalId, nextTask.id);
-    } else {
-      // 追加到末尾
-      await api.handleMoveTask(draggedTask, targetGoalId, null);
-    }
-  }
-}
-
-function clearTaskDrag() {
-  draggingTaskId.value = null;
-  dragOverTaskId.value = null;
-  dragOverGoalId.value = null;
-}
+// ===== 任务拖拽逻辑已迁移至 TaskList.vue（含虚拟滚动支持） =====
 
 // ===== 目标拖拽 =====
 
@@ -304,8 +230,8 @@ async function onCardDrop(e: DragEvent) {
     const taskId = draggingTaskId.value;
     const targetGoalId = props.node.goal.id;
     const firstTask = props.node.tasks[0]; // 放置到最前面
-    clearTaskDrag();
-    const task = findTaskInTree(taskId);
+    api.clearTaskDrag();
+    const task = api.findTaskInTree(taskId);
     if (!task || task.goal_id === targetGoalId) return;
     // 1b: 放置到该目标直属任务列表最前面
     await api.handleMoveTask(task, targetGoalId, firstTask?.id ?? null);
@@ -382,49 +308,12 @@ const isGoalDragOverInside = computed(
     dropPosition.value === "inside",
 );
 
-function isTaskDropBefore(task: Task): boolean {
-  return (
-    draggingTaskId.value !== null &&
-    dragOverTaskId.value === task.id &&
-    taskDropPosition.value === "before"
-  );
-}
-
-function isTaskDropAfter(task: Task): boolean {
-  return (
-    draggingTaskId.value !== null &&
-    dragOverTaskId.value === task.id &&
-    taskDropPosition.value === "after"
-  );
-}
-
 const isDraggingThisGoal = computed(
   () => draggingGoal.value?.id === props.node.goal.id,
 );
 
-// ===== 树内查找 =====
-
-function findTaskInTree(taskId: string): Task | null {
-  for (const t of props.node.tasks) {
-    if (t.id === taskId) return t;
-  }
-  for (const child of props.node.sub_goals) {
-    const found = findTaskInNode(child, taskId);
-    if (found) return found;
-  }
-  return null;
-}
-
-function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
-  for (const t of node.tasks) {
-    if (t.id === taskId) return t;
-  }
-  for (const child of node.sub_goals) {
-    const found = findTaskInNode(child, taskId);
-    if (found) return found;
-  }
-  return null;
-}
+// 注：isTaskDropBefore/After 和 findTaskInTree/findTaskInNode 已迁移至
+// TaskList.vue / GoalTreeApi（findTaskInTree 提升至 api 层供 onCardDrop 复用）
 </script>
 
 <template>
@@ -521,17 +410,22 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
             <template #icon><Icon icon="mdi:folder-plus-outline" /></template>
             子目标
           </NButton>
-          <!-- 视频拆解 -->
-          <NButton
-            size="tiny"
-            type="primary"
-            ghost
-            :disabled="!node.goal.deadline || node.goal.total_qty <= 0"
-            @click="api.handleAutoSplit(node.goal)"
-          >
-            <template #icon><Icon icon="mdi:auto-fix" /></template>
-            视频拆解
-          </NButton>
+          <!-- 自动拆解（整合入口：按截止日期均分 / 按时间预算 / 自定义日期范围） -->
+          <NTooltip placement="top">
+            <template #trigger>
+              <NButton
+                size="tiny"
+                type="primary"
+                ghost
+                :disabled="node.goal.total_qty <= 0"
+                @click="api.openSplitModal(node.goal)"
+              >
+                <template #icon><Icon icon="mdi:auto-fix" /></template>
+                自动拆解
+              </NButton>
+            </template>
+            按截止日期均分 / 按时间预算 / 自定义日期范围
+          </NTooltip>
           <!-- 重新规划 -->
           <NButton
             size="tiny"
@@ -583,64 +477,19 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
           :level="level + 1"
         />
 
-        <!-- 直属任务 -->
-        <div v-if="node.tasks.length > 0" class="space-y-0.5">
-          <div v-if="hasChildren" class="text-xs text-gray-400 px-3 py-1">
-            直属任务
-          </div>
-          <div
-            v-for="(task, idx) in node.tasks"
-            :key="task.id"
-            draggable="true"
-            :class="[
-              'flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-grab',
-              'hover:bg-gray-50',
-              'task-row',
-              draggingTaskId === task.id ? 'dragging-opacity' : '',
-              isTaskDropBefore(task) ? 'task-drop-before' : '',
-              isTaskDropAfter(task) ? 'task-drop-after' : '',
-            ]"
-            :title="`拖拽以移动或排序（当前归属：${node.goal.name}）`"
-            @dragstart="onTaskDragStart($event, task)"
-            @dragend="onTaskDragEnd"
-            @dragover="onTaskRowDragOver($event, task)"
-            @dragleave="onTaskRowDragLeave($event, task)"
-            @drop="onTaskRowDrop($event, task, idx)"
-            @click.stop
-          >
-            <Icon
-              :icon="STATUS_META[task.status].icon"
-              :color="STATUS_META[task.status].color"
-              width="16"
-            />
-            <span
-              class="flex-1 truncate"
-              :class="{ 'line-through text-gray-400': task.status === 'done' }"
-            >
-              {{ task.name }}
-            </span>
-            <span class="text-xs text-gray-500">{{ task.plan_date }}</span>
-            <NTag
-              size="tiny"
-              :bordered="false"
-              :type="task.source === 'auto' ? 'info' : 'warning'"
-            >
-              {{ task.source === "auto" ? "自动" : "手动" }}
-            </NTag>
-            <span class="text-xs text-gray-500">
-              {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
-            </span>
-            <NDropdown
-              trigger="click"
-              :options="api.buildTaskActions(task)"
-              @select="(key: string) => onTaskSelect(key, task)"
-            >
-              <NButton size="tiny" quaternary>
-                <Icon icon="mdi:dots-horizontal" width="16" />
-              </NButton>
-            </NDropdown>
-          </div>
-        </div>
+        <!-- 直属任务（虚拟滚动：>50 任务时启用 NVirtualList） -->
+        <TaskList
+          v-if="node.tasks.length > 0"
+          :tasks="node.tasks"
+          :goal-id="node.goal.id"
+          :goal-name="node.goal.name"
+        >
+          <template #label>
+            <div v-if="hasChildren" class="text-xs text-gray-400 px-3 py-1">
+              直属任务
+            </div>
+          </template>
+        </TaskList>
 
         <!-- 空状态 -->
         <div
@@ -692,19 +541,9 @@ function findTaskInNode(node: GoalTreeNode, taskId: string): Task | null {
     background-color 0.1s ease;
 }
 
-/* 任务行拖拽悬停在上方（插入之前） */
-.task-drop-before {
-  box-shadow: 0 -2px 0 0 #18a058;
-  transition: box-shadow 0.1s ease;
-}
+/* 任务行拖拽视觉类（.task-drop-before/after）已迁移至 TaskList.vue */
 
-/* 任务行拖拽悬停在下方（插入之后） */
-.task-drop-after {
-  box-shadow: 0 2px 0 0 #18a058;
-  transition: box-shadow 0.1s ease;
-}
-
-/* 任务行拖拽手柄视觉 */
+/* 拖拽手柄视觉（目标头部 draggable） */
 [draggable="true"] {
   user-select: none;
 }

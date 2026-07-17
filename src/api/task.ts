@@ -7,6 +7,8 @@ import type {
   MoveTaskInput,
   CalendarTask,
   UpdateTaskInput,
+  SetTaskDependencyInput,
+  TaskDependency,
 } from "@/types";
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
@@ -67,4 +69,46 @@ export async function listTasksByDateRange(
   endDate: string,
 ): Promise<CalendarTask[]> {
   return invoke("list_tasks_by_date_range", { startDate, endDate });
+}
+
+// ===== P1-1 任务依赖关系 =====
+
+/** 设置任务依赖（task_id 依赖 depends_on_id），自动防循环 */
+export async function setTaskDependency(
+  input: SetTaskDependencyInput,
+): Promise<void> {
+  return invoke("set_task_dependency", { input });
+}
+
+/** 列出某任务的直接前置依赖任务 */
+export async function listTaskDependencies(taskId: string): Promise<Task[]> {
+  return invoke("list_task_dependencies", { taskId });
+}
+
+/** 列出依赖某任务的后继任务（哪些任务依赖此任务） */
+export async function listTaskDependents(taskId: string): Promise<Task[]> {
+  return invoke("list_task_dependents", { taskId });
+}
+
+/** 移除任务依赖 */
+export async function removeTaskDependency(
+  taskId: string,
+  dependsOnId: string,
+): Promise<void> {
+  return invoke("remove_task_dependency", { taskId, dependsOnId });
+}
+
+/** 校验添加依赖是否会形成循环（返回 true 表示安全无环） */
+export async function validateDependencyChain(
+  taskId: string,
+  dependsOnId: string,
+): Promise<boolean> {
+  return invoke("validate_dependency_chain", { taskId, dependsOnId });
+}
+
+/** 列出某任务的依赖记录（含 id、created_at） */
+export async function listTaskDependencyRecords(
+  taskId: string,
+): Promise<TaskDependency[]> {
+  return invoke("list_task_dependency_records", { taskId });
 }

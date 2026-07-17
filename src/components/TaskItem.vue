@@ -8,7 +8,9 @@ import {
   NModal,
   NForm,
   NFormItem,
+  NTooltip,
   useMessage,
+  useDialog,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import type { TodayTask } from "@/types";
@@ -28,6 +30,7 @@ const emit = defineEmits<{ (e: "completed"): void }>();
 const taskStore = useTaskStore();
 const goalStore = useGoalStore();
 const message = useMessage();
+const dialog = useDialog();
 
 const statusMeta = computed(() => STATUS_META[props.task.status]);
 const isQtyTask = computed(() => props.task.plan_qty > 1);
@@ -35,6 +38,16 @@ const isQtyTask = computed(() => props.task.plan_qty > 1);
 const canBackfill = computed(
   () => props.overdue || props.task.status === "skipped",
 );
+/** 是否被依赖阻塞（前置任务未完成），完成按钮需禁用 */
+const isBlocked = computed(() => props.task.is_blocked);
+/** 阻塞提示文案：列出具体未完成的前置任务名称 */
+const blockedTooltip = computed(() => {
+  const names = props.task.blocked_by_names;
+  if (names) {
+    return `前置任务未完成：${names}`;
+  }
+  return "前置任务未完成，暂不可标记完成";
+});
 
 const showCompleteModal = ref(false);
 const showBackfillModal = ref(false);
@@ -100,62 +113,110 @@ function confirmComplete() {
   doComplete(actualQty.value);
 }
 
-async function handleSkip() {
-  try {
-    await taskStore.skipTask(props.task.id);
-    await goalStore.fetchProgresses();
-    message.info("已跳过");
-  } catch (e) {
-    message.error(String(e));
-  }
+function handleSkip() {
+  dialog.warning({
+    title: "跳过任务",
+    content: `确定跳过任务"${props.task.name}"？`,
+    positiveText: "跳过",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await taskStore.skipTask(props.task.id);
+        await goalStore.fetchProgresses();
+        message.info("已跳过");
+      } catch (e) {
+        message.error(String(e));
+      }
+    },
+  });
 }
 </script>
 
 <template>
   <div
     class="task-item flex items-center gap-3 px-3 py-2 rounded transition-colors hover:bg-gray-50"
-    :class="{ 'bg-red-50': overdue }"
+    :class="{
+      'bg-red-50': overdue,
+    }"
   >
-    <Icon :icon="statusMeta.icon" :color="statusMeta.color" width="20" />
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2">
-        <span
-          class="text-sm font-medium truncate"
-          :class="{ 'line-through text-gray-400': task.status === 'done' }"
-        >
-          {{ task.name }}
-        </span>
-        <NTag size="tiny" :bordered="false" type="info">{{
-          task.goal_name
-        }}</NTag>
+    <div
+      class="flex-1 flex items-center gap-3 min-w-0"
+      :class="{ 'opacity-40': isBlocked }"
+    >
+      <Icon :icon="statusMeta.icon" :color="statusMeta.color" width="20" />
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <NTooltip v-if="isBlocked" placement="top">
+            <template #trigger>
+              <Icon
+                icon="mdi:lock-outline"
+                class="text-gray-400 shrink-0"
+                width="14"
+              />
+            </template>
+            {{ blockedTooltip }}
+          </NTooltip>
+          <span
+            class="text-sm font-medium truncate"
+            :class="{ 'line-through text-gray-400': task.status === 'done' }"
+          >
+            {{ task.name }}
+          </span>
+          <NTag size="tiny" :bordered="false" type="info">{{
+            task.goal_name
+          }}</NTag>
+        </div>
+        <div class="text-xs text-gray-500 mt-0.5">{{ completionText }}</div>
       </div>
-      <div class="text-xs text-gray-500 mt-0.5">{{ completionText }}</div>
     </div>
 
     <NSpace
       v-if="task.status !== 'done' && task.status !== 'skipped'"
       :size="4"
     >
-      <NButton size="tiny" type="primary" @click="openCompleteModal">
-        <template #icon><Icon icon="mdi:check" /></template>
-        完成
-      </NButton>
-      <NButton size="tiny" quaternary @click="handleSkip">
-        <template #icon><Icon icon="mdi:skip-next" /></template>
+      <NTooltip :disabled="!isBlocked" placement="top">
+        <template #trigger>
+          <NButton
+            size="tiny"
+            type="primary"
+            :disabled="isBlocked"
+            @click="openCompleteModal"
+          >
+            <template #icon>
+              <Icon icon="mdi:check" width="16" />
+            </template>
+            完成
+          </NButton>
+        </template>
+        {{ blockedTooltip }}
+      </NTooltip>
+      <NButton size="tiny" type="default" @click="handleSkip">
+        <template #icon>
+          <Icon icon="mdi:skip-next" width="16" />
+        </template>
         跳过
       </NButton>
     </NSpace>
     <!-- 补完成按钮（逾期/已跳过的任务） -->
-    <NButton
+    <NTooltip
       v-else-if="canBackfill && task.status !== 'done'"
-      size="tiny"
-      type="warning"
-      ghost
-      @click="openBackfillModal"
+      :disabled="!isBlocked"
+      placement="top"
     >
-      <template #icon><Icon icon="mdi:history" /></template>
-      补完成
-    </NButton>
+      <template #trigger>
+        <NButton
+          size="tiny"
+          type="warning"
+          ghost
+          :disabled="isBlocked"
+          @click="openBackfillModal"
+        >
+          <template #icon><Icon icon="mdi:history" /></template>
+          补完成
+        </NButton>
+      </template>
+      {{ blockedTooltip }}
+    </NTooltip>
     <NTag
       v-else-if="task.status === 'done'"
       size="tiny"

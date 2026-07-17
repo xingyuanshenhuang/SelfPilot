@@ -9,7 +9,9 @@ import {
   NTag,
   NEmpty,
   NCheckbox,
+  NTooltip,
   useMessage,
+  useDialog,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import {
@@ -39,6 +41,7 @@ type ViewMode = "month" | "week" | "day";
 
 const goalStore = useGoalStore();
 const message = useMessage();
+const dialog = useDialog();
 
 const viewMode = ref<ViewMode>("month");
 const currentDate = ref(new Date());
@@ -182,7 +185,7 @@ function toggleSelect(taskId: string, checked: boolean) {
 
 function selectAllVisible() {
   for (const t of selectedDayTasks.value) {
-    if (t.status !== "done" && t.status !== "skipped") {
+    if (t.status !== "done" && t.status !== "skipped" && !t.is_blocked) {
       selectedTaskIds.value.add(t.id);
     }
   }
@@ -193,12 +196,16 @@ function clearSelection() {
 
 async function batchComplete() {
   const ids = Array.from(selectedTaskIds.value);
-  if (ids.length === 0) {
-    message.warning("请先选择任务");
+  // 防御性过滤阻塞任务，避免后端校验报错
+  const validIds = ids.filter(
+    (id) => !tasks.value.find((t) => t.id === id)?.is_blocked,
+  );
+  if (validIds.length === 0) {
+    message.warning("没有可完成的任务（前置依赖未就绪）");
     return;
   }
   let ok = 0;
-  for (const id of ids) {
+  for (const id of validIds) {
     try {
       const task = tasks.value.find((t) => t.id === id);
       if (!task) continue;
@@ -250,15 +257,23 @@ async function quickComplete(task: CalendarTask) {
   }
 }
 
-async function quickSkip(task: CalendarTask) {
-  try {
-    await taskApi.skipTask(task.id);
-    await goalStore.fetchProgresses();
-    await loadData();
-    message.info("已跳过");
-  } catch (e) {
-    message.error(String(e));
-  }
+function quickSkip(task: CalendarTask) {
+  dialog.warning({
+    title: "跳过任务",
+    content: `确定跳过任务"${task.name}"？`,
+    positiveText: "跳过",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await taskApi.skipTask(task.id);
+        await goalStore.fetchProgresses();
+        await loadData();
+        message.info("已跳过");
+      } catch (e) {
+        message.error(String(e));
+      }
+    },
+  });
 }
 </script>
 
@@ -415,7 +430,7 @@ async function quickSkip(task: CalendarTask) {
             <NButton size="small" @click="selectAllVisible">全选</NButton>
             <NButton size="small" @click="clearSelection">清空</NButton>
             <NButton size="small" type="primary" @click="batchComplete">
-              <template #icon><Icon icon="mdi:check-all" /></template>
+              <template #icon><Icon icon="mdi:playlist-check" /></template>
               批量完成
             </NButton>
             <NButton size="small" type="warning" @click="batchSkip">
@@ -430,50 +445,94 @@ async function quickSkip(task: CalendarTask) {
             v-for="t in selectedDayTasks"
             :key="t.id"
             class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-50"
-            :class="{ 'bg-red-50': t.is_overdue }"
+            :class="{
+              'bg-red-50': t.is_overdue,
+            }"
           >
             <NCheckbox
               v-if="t.status !== 'done' && t.status !== 'skipped'"
               :checked="selectedTaskIds.has(t.id)"
+              :disabled="t.is_blocked"
               @update:checked="(v) => toggleSelect(t.id, v)"
             />
-            <Icon
-              :icon="STATUS_META[t.status].icon"
-              :color="STATUS_META[t.status].color"
-              width="18"
-            />
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span
-                  class="text-sm font-medium truncate"
-                  :class="{ 'line-through text-gray-400': t.status === 'done' }"
-                  >{{ t.name }}</span
-                >
-                <NTag size="tiny" :bordered="false" type="info">{{
-                  t.goal_name
-                }}</NTag>
-                <NTag
-                  v-if="t.is_overdue"
-                  size="tiny"
-                  type="error"
-                  :bordered="false"
-                  >逾期</NTag
-                >
-              </div>
-              <div class="text-xs text-gray-500 mt-0.5">
-                {{ t.actual_qty }}/{{ t.plan_qty }}{{ t.unit }}
+            <div
+              class="flex-1 flex items-center gap-2 min-w-0"
+              :class="{ 'opacity-40': t.is_blocked }"
+            >
+              <Icon
+                :icon="STATUS_META[t.status].icon"
+                :color="STATUS_META[t.status].color"
+                width="18"
+              />
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <NTooltip v-if="t.is_blocked" placement="top">
+                    <template #trigger>
+                      <Icon
+                        icon="mdi:lock-outline"
+                        class="text-gray-400 shrink-0"
+                        width="14"
+                      />
+                    </template>
+                    {{
+                      t.blocked_by_names
+                        ? `前置任务未完成：${t.blocked_by_names}`
+                        : "前置任务未完成，暂不可标记完成"
+                    }}
+                  </NTooltip>
+                  <span
+                    class="text-sm font-medium truncate"
+                    :class="{
+                      'line-through text-gray-400': t.status === 'done',
+                    }"
+                    >{{ t.name }}</span
+                  >
+                  <NTag size="tiny" :bordered="false" type="info">{{
+                    t.goal_name
+                  }}</NTag>
+                  <NTag
+                    v-if="t.is_overdue"
+                    size="tiny"
+                    type="error"
+                    :bordered="false"
+                    >逾期</NTag
+                  >
+                </div>
+                <div class="text-xs text-gray-500 mt-0.5">
+                  {{ t.actual_qty }}/{{ t.plan_qty }}{{ t.unit }}
+                </div>
               </div>
             </div>
             <NSpace
               v-if="t.status !== 'done' && t.status !== 'skipped'"
               :size="4"
             >
-              <NButton size="tiny" type="primary" @click="quickComplete(t)"
-                >完成</NButton
-              >
-              <NButton size="tiny" quaternary @click="quickSkip(t)"
-                >跳过</NButton
-              >
+              <NTooltip :disabled="!t.is_blocked" placement="top">
+                <template #trigger>
+                  <NButton
+                    size="tiny"
+                    type="primary"
+                    :disabled="t.is_blocked"
+                    @click="quickComplete(t)"
+                  >
+                    <template #icon>
+                      <Icon icon="mdi:check" width="16" />
+                    </template>
+                    完成
+                  </NButton>
+                </template>
+                {{
+                  t.blocked_by_names
+                    ? `前置任务未完成：${t.blocked_by_names}`
+                    : "前置任务未完成"
+                }}
+              </NTooltip>
+              <NButton size="tiny" type="default" @click="quickSkip(t)">
+                <template #icon>
+                  <Icon icon="mdi:skip-next" width="16" />
+                </template>
+                跳过
+              </NButton>
             </NSpace>
             <NTag
               v-else-if="t.status === 'done'"
