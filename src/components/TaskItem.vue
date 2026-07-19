@@ -17,7 +17,7 @@ import type { TodayTask } from "@/types";
 import { STATUS_META } from "@/types";
 import { useTaskStore } from "@/stores/taskStore";
 import { useGoalStore } from "@/stores/goalStore";
-import { randomEncouragement } from "@/constants/encouragements";
+import { useEncouragementStore } from "@/stores/encouragementStore";
 import * as taskApi from "@/api/task";
 
 const props = defineProps<{
@@ -29,6 +29,7 @@ const emit = defineEmits<{ (e: "completed"): void }>();
 
 const taskStore = useTaskStore();
 const goalStore = useGoalStore();
+const encStore = useEncouragementStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -80,12 +81,26 @@ function openBackfillModal() {
 
 async function doComplete(qty: number) {
   try {
-    await taskStore.completeTask({
+    // P0-2：在 completeTask 前捕获今日已完成数（completeTask 内部会 fetchAll 刷新 todayTasks）
+    // beforeDoneCount === 0 表示这是今日首个完成，modal 由 taskStore 内部触发，此处跳过 toast
+    const beforeDoneCount = taskStore.todayTasks.filter(
+      (t) => t.status === "done",
+    ).length;
+
+    // P2-3：taskStore.completeTask 保留鼓励语逻辑，用返回值做局部更新
+    const updated = await taskStore.completeTask({
       task_id: props.task.id,
       actual_qty: qty,
     });
-    await goalStore.fetchProgresses();
-    message.success(randomEncouragement());
+    goalStore.updateTaskLocally(updated);
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
+
+    // P0-1：toast 文案改用 encStore.random（统一文案源）
+    // P0-2：首任务完成时跳过 toast（避免与 modal 双弹冲突）
+    if (beforeDoneCount > 0) {
+      const enc = await encStore.random("complete_normal");
+      if (enc) message.success(enc.text);
+    }
     emit("completed");
   } catch (e) {
     message.error(String(e));
@@ -95,11 +110,13 @@ async function doComplete(qty: number) {
 /** 补完成：只更新历史完成记录，不触发重新规划 */
 async function doBackfill() {
   try {
-    await taskApi.backfillTask({
+    // P2-3：保存返回值，局部更新任务
+    const updated = await taskApi.backfillTask({
       task_id: props.task.id,
       actual_qty: backfillQty.value,
     });
-    await goalStore.fetchProgresses();
+    goalStore.updateTaskLocally(updated);
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
     message.success("已补完成");
     showBackfillModal.value = false;
     emit("completed");
@@ -121,8 +138,10 @@ function handleSkip() {
     negativeText: "取消",
     onPositiveClick: async () => {
       try {
-        await taskStore.skipTask(props.task.id);
-        await goalStore.fetchProgresses();
+        // P2-3：taskStore.skipTask 现在返回 Task，用返回值做局部更新
+        const updated = await taskStore.skipTask(props.task.id);
+        goalStore.updateTaskLocally(updated);
+        await goalStore.refreshProgressForGoalChain(updated.goal_id);
         message.info("已跳过");
       } catch (e) {
         message.error(String(e));

@@ -434,6 +434,19 @@ pub struct AddEncouragementInput {
     pub level: Option<String>,
 }
 
+/// 更新鼓励语输入（P0-5：补齐编辑功能）
+///
+/// 仅自定义文案可修改；预设文案拒绝修改。
+/// text 与 level 均为可选，未传字段保持原值。
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEncouragementInput {
+    pub id: String,
+    /// 可选新文本，传入时需满足 2~100 字符
+    pub text: Option<String>,
+    /// 可选新等级：normal | advanced | highlight | celebration
+    pub level: Option<String>,
+}
+
 /// 设置项（key-value）
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Setting {
@@ -518,6 +531,28 @@ pub struct HeatmapCell {
     pub completion_rate: f64,
 }
 
+/// 每日负载（按目标分组）— P2-5 跨目标负载平衡
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyLoad {
+    /// 日期 yyyy-MM-dd
+    pub date: String,
+    /// 当日任务总数（不含跳过）
+    pub total_tasks: i64,
+    /// 当日任务总量（plan_qty 之和，不含跳过）
+    pub total_qty: f64,
+    /// 按目标分组的负载明细
+    pub by_goal: Vec<GoalLoad>,
+}
+
+/// 单目标在某日的负载 — P2-5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalLoad {
+    pub goal_id: String,
+    pub goal_name: String,
+    pub task_count: i64,
+    pub total_qty: f64,
+}
+
 /// 完成预测状态
 ///
 /// PRD §4.2 模块六 & 分阶段计划 Sprint 6：
@@ -563,6 +598,21 @@ pub struct TaskDependency {
     pub task_id: String,
     pub depends_on_id: String,
     pub created_at: String,
+}
+
+/// 删除任务结果（P2-3：返回被删任务所属 goal_id，供前端局部更新进度）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteTaskResult {
+    pub task_id: String,
+    pub goal_id: String,
+}
+
+/// 批量删除任务结果（P2-3：返回受影响的 goal_id 列表，供前端局部更新进度）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteTasksBatchResult {
+    pub deleted_count: i64,
+    /// 受影响的 goal_id 列表（去重）
+    pub affected_goal_ids: Vec<String>,
 }
 
 /// 设置任务依赖输入

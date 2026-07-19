@@ -2,8 +2,8 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::db::models::{
-    CalendarTask, CompleteTaskInput, CreateTaskInput, Goal, MoveTaskInput, SetTaskDependencyInput,
-    Task, TaskDependency, TodayTask, UpdateTaskInput,
+    CalendarTask, CompleteTaskInput, CreateTaskInput, DeleteTaskResult, DeleteTasksBatchResult,
+    Goal, MoveTaskInput, SetTaskDependencyInput, Task, TaskDependency, TodayTask, UpdateTaskInput,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
@@ -527,9 +527,18 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
 ///
 /// 同时清理该任务相关的依赖关系（作为前置或后继）。
 /// SQLite 默认未启用外键级联，需显式删除 task_dependencies。
+///
+/// P2-3：返回被删任务所属 goal_id，供前端局部更新进度（无需全量重拉）。
 #[tauri::command]
-pub async fn delete_task(task_id: String, state: State<'_, DbPool>) -> AppResult<()> {
+pub async fn delete_task(task_id: String, state: State<'_, DbPool>) -> AppResult<DeleteTaskResult> {
     let mut tx = state.0.begin().await?;
+
+    // 删除前查询 goal_id（供前端局部更新进度）
+    let goal_id: String = sqlx::query_scalar("SELECT goal_id FROM tasks WHERE id = ?")
+        .bind(&task_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
 
     // 清理依赖：删除该任务作为 task_id 或 depends_on_id 的所有记录
     sqlx::query("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?")
@@ -544,7 +553,66 @@ pub async fn delete_task(task_id: String, state: State<'_, DbPool>) -> AppResult
         .await?;
 
     tx.commit().await?;
-    Ok(())
+    Ok(DeleteTaskResult { task_id, goal_id })
+}
+
+/// 批量删除任务（单事务，避免 N 次 IPC 调用撑爆通道）
+///
+/// 同时清理相关依赖关系。用于"删除全部关联项"等场景。
+///
+/// P2-3：返回受影响的 goal_id 列表（去重），供前端局部更新进度。
+#[tauri::command]
+pub async fn delete_tasks_batch(
+    task_ids: Vec<String>,
+    state: State<'_, DbPool>,
+) -> AppResult<DeleteTasksBatchResult> {
+    if task_ids.is_empty() {
+        return Ok(DeleteTasksBatchResult {
+            deleted_count: 0,
+            affected_goal_ids: vec![],
+        });
+    }
+    let mut tx = state.0.begin().await?;
+
+    // 删除前查询所有受影响的 goal_id（去重）
+    let mut affected_goal_ids: Vec<String> = Vec::new();
+    for id in &task_ids {
+        let goal_id: Option<String> =
+            sqlx::query_scalar("SELECT goal_id FROM tasks WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(gid) = goal_id {
+            if !affected_goal_ids.contains(&gid) {
+                affected_goal_ids.push(gid);
+            }
+        }
+    }
+
+    // 批量清理依赖
+    for id in &task_ids {
+        sqlx::query("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?")
+            .bind(id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    // 批量删除任务
+    let mut deleted = 0i64;
+    for id in &task_ids {
+        let r = sqlx::query("DELETE FROM tasks WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        deleted += r.rows_affected() as i64;
+    }
+
+    tx.commit().await?;
+    Ok(DeleteTasksBatchResult {
+        deleted_count: deleted,
+        affected_goal_ids,
+    })
 }
 
 /// 按日期范围查询任务（日历视图用）

@@ -10,11 +10,14 @@ import {
   NEmpty,
   NStatistic,
   NSelect,
+  NModal,
+  NForm,
+  NFormItem,
   useMessage,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { useEncouragementStore } from "@/stores/encouragementStore";
-import type { EncouragementLevel } from "@/types";
+import type { Encouragement, EncouragementLevel } from "@/types";
 
 type TagType = "default" | "success" | "error" | "warning" | "info" | "primary";
 
@@ -23,6 +26,16 @@ const message = useMessage();
 
 const newText = ref("");
 const newLevel = ref<EncouragementLevel>("normal");
+
+// P0-5：编辑鼓励语状态
+const showEditModal = ref(false);
+const editingItem = ref<Encouragement | null>(null);
+const editText = ref("");
+const editLevel = ref<EncouragementLevel>("normal");
+const saving = ref(false);
+
+// P0-6：删除按钮防连点状态
+const deletingId = ref<string | null>(null);
 
 const levelOptions = [
   { label: "普通（1天连续）", value: "normal" },
@@ -91,12 +104,50 @@ async function handleAdd() {
   }
 }
 
-async function handleDelete(id: string) {
+/** P0-5：打开编辑弹窗，填充原数据 */
+function openEditModal(item: Encouragement) {
+  editingItem.value = item;
+  editText.value = item.text;
+  editLevel.value = item.level;
+  showEditModal.value = true;
+}
+
+/** P0-5：保存编辑 */
+async function handleEditSave() {
+  if (!editingItem.value) return;
+  const text = editText.value.trim();
+  if (text.length < 2) {
+    message.warning("鼓励语至少 2 个字");
+    return;
+  }
+  if (text.length > 100) {
+    message.warning("鼓励语不超过 100 字");
+    return;
+  }
+  saving.value = true;
   try {
-    await store.remove(id);
-    message.success("已删除");
+    await store.update(editingItem.value.id, text, editLevel.value);
+    message.success("已更新");
+    showEditModal.value = false;
   } catch (e) {
     message.error(String(e));
+  } finally {
+    saving.value = false;
+  }
+}
+
+/** P0-6：删除反馈增强 — 回显被删文案前 12 字 + 防连点 */
+async function handleDelete(item: Encouragement) {
+  deletingId.value = item.id;
+  try {
+    await store.remove(item.id);
+    const preview = item.text.slice(0, 12);
+    const ellipsis = item.text.length > 12 ? "..." : "";
+    message.success(`已删除："${preview}${ellipsis}"`);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    deletingId.value = null;
   }
 }
 
@@ -249,12 +300,32 @@ const presetByLevel = computed(() => store.byLevel);
           >
             {{ item.category === "preset" ? "预设" : "自定义" }}
           </NTag>
+          <!-- P0-5：编辑按钮（仅自定义文案） -->
+          <NButton
+            v-if="item.category === 'custom'"
+            size="tiny"
+            quaternary
+            type="info"
+            :disabled="deletingId !== null"
+            @click="openEditModal(item)"
+          >
+            <Icon icon="mdi:pencil-outline" width="14" />
+          </NButton>
+          <!-- P0-6：删除按钮加 loading + disabled 防连点 -->
           <NPopconfirm
             v-if="item.category === 'custom'"
-            @positive-click="handleDelete(item.id)"
+            positive-text="确定"
+            negative-text="取消"
+            @positive-click="handleDelete(item)"
           >
             <template #trigger>
-              <NButton size="tiny" quaternary type="error">
+              <NButton
+                size="tiny"
+                quaternary
+                type="error"
+                :loading="deletingId === item.id"
+                :disabled="deletingId !== null && deletingId !== item.id"
+              >
                 <Icon icon="mdi:delete" width="14" />
               </NButton>
             </template>
@@ -264,5 +335,43 @@ const presetByLevel = computed(() => store.byLevel);
       </div>
       <NEmpty v-else :description="`暂无${LEVEL_META[level].label}鼓励语`" />
     </NCard>
+
+    <!-- P0-5：编辑鼓励语弹窗 -->
+    <NModal
+      v-model:show="showEditModal"
+      preset="card"
+      title="编辑鼓励语"
+      style="width: 420px"
+    >
+      <NForm label-placement="top">
+        <NFormItem label="鼓励语内容">
+          <NInput
+            v-model:value="editText"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 4 }"
+            maxlength="100"
+            show-count
+            placeholder="输入鼓励语内容"
+          />
+        </NFormItem>
+        <NFormItem label="等级">
+          <NSelect
+            v-model:value="editLevel"
+            :options="levelOptions"
+            style="width: 100%"
+          />
+        </NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton :disabled="saving" @click="showEditModal = false">
+            取消
+          </NButton>
+          <NButton type="primary" :loading="saving" @click="handleEditSave">
+            保存
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
   </div>
 </template>

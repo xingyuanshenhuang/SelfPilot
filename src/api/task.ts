@@ -9,6 +9,8 @@ import type {
   UpdateTaskInput,
   SetTaskDependencyInput,
   TaskDependency,
+  DeleteTaskResult,
+  DeleteTasksBatchResult,
 } from "@/types";
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
@@ -46,9 +48,19 @@ export async function updateTask(input: UpdateTaskInput): Promise<Task> {
   return invoke("update_task", { input });
 }
 
-/** 删除任务 */
-export async function deleteTask(taskId: string): Promise<void> {
+/** 删除任务（P2-3：返回被删任务所属 goal_id，供局部更新进度） */
+export async function deleteTask(taskId: string): Promise<DeleteTaskResult> {
   return invoke("delete_task", { taskId });
+}
+
+/** 批量删除任务（单事务，避免 N 次 IPC 调用撑爆通道）
+ *
+ * P2-3：返回受影响的 goal_id 列表，供局部更新进度。
+ */
+export async function deleteTasksBatch(
+  taskIds: string[],
+): Promise<DeleteTasksBatchResult> {
+  return invoke("delete_tasks_batch", { taskIds });
 }
 
 export async function listTodayTasks(): Promise<TodayTask[]> {

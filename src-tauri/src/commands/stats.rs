@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::db::models::{
-    CompletionPrediction, DailyTrend, GoalCompletionStat, HeatmapCell,
+    CompletionPrediction, DailyLoad, DailyTrend, GoalCompletionStat, GoalLoad, HeatmapCell,
 };
 use crate::db::DbPool;
 use crate::error::AppResult;
@@ -410,4 +410,72 @@ pub async fn get_completion_predictions(
     }
 
     Ok(predictions)
+}
+
+/// 获取日期范围内每日负载（按目标分组）— P2-5 跨目标负载平衡
+///
+/// 用于：
+/// - 日历视图色阶显示（按 total_tasks 分级）
+/// - 拆解前过载检查（按 total_tasks 阈值警告）
+/// - 已跳过任务不计入负载
+#[tauri::command]
+pub async fn get_daily_load(
+    start_date: String,
+    end_date: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Vec<DailyLoad>> {
+    // SQL：JOIN goals 拿名称，按 plan_date + goal_id 分组
+    let rows: Vec<(String, String, String, i64, f64)> = sqlx::query_as(
+        "SELECT t.plan_date, t.goal_id, g.name,
+                COUNT(*) as task_count,
+                CAST(COALESCE(SUM(t.plan_qty), 0) AS REAL) as total_qty
+         FROM tasks t
+         INNER JOIN goals g ON t.goal_id = g.id
+         WHERE t.plan_date IS NOT NULL
+           AND t.plan_date >= ? AND t.plan_date <= ?
+           AND t.status != 'skipped'
+         GROUP BY t.plan_date, t.goal_id, g.name
+         ORDER BY t.plan_date",
+    )
+    .bind(&start_date)
+    .bind(&end_date)
+    .fetch_all(&state.0)
+    .await?;
+
+    // 应用层聚合：按日期分组
+    use std::collections::BTreeMap;
+    let mut daily_map: BTreeMap<String, (i64, f64, Vec<GoalLoad>)> = BTreeMap::new();
+    for (date, goal_id, goal_name, task_count, total_qty) in rows {
+        let entry = daily_map.entry(date).or_insert((0, 0.0, Vec::new()));
+        entry.0 += task_count;
+        entry.1 += total_qty;
+        entry.2.push(GoalLoad {
+            goal_id,
+            goal_name,
+            task_count,
+            total_qty,
+        });
+    }
+
+    // 填充日期范围内每一天（含无任务日）
+    let start = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| crate::error::AppError::Param(format!("起始日期格式错误: {}", e)))?;
+    let end = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| crate::error::AppError::Param(format!("结束日期格式错误: {}", e)))?;
+
+    let mut result = Vec::new();
+    let mut cursor = start;
+    while cursor <= end {
+        let date_str = cursor.format("%Y-%m-%d").to_string();
+        let (total_tasks, total_qty, by_goal) =
+            daily_map.remove(&date_str).unwrap_or((0, 0.0, Vec::new()));
+        result.push(DailyLoad {
+            date: date_str,
+            total_tasks,
+            total_qty,
+            by_goal,
+        });
+        cursor += chrono::Duration::days(1);
+    }
+    Ok(result)
 }

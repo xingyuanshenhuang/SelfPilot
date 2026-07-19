@@ -187,7 +187,9 @@ function isTaskDropAfter(task: Task): boolean {
     </template>
 
     <!-- 虚拟模式：NVirtualList 仅渲染可见行（行内 DOM 与上方完全一致） -->
-    <div v-else style="max-height: 400px; overflow: hidden">
+    <!-- 注：NVirtualList 内部 .v-vl 用 height:100% + max-height:inherit，
+         外层必须显式高度（不能用 max-height + overflow:hidden，否则 height:100% 解析为 0） -->
+    <div v-else style="height: 400px">
       <NVirtualList
         :items="tasks"
         :item-size="ROW_HEIGHT"

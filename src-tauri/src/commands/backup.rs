@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::models::{
     Encouragement, ExportData, Goal, ImportInput, ImportResult, Setting, Task,
@@ -43,6 +43,32 @@ pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
 
     serde_json::to_string_pretty(&data)
         .map_err(|e| AppError::Internal(format!("序列化失败: {}", e)))
+}
+
+/// 导出全部数据到指定路径的 JSON 文件
+///
+/// 与 export_data 相同，但直接写入用户选择的文件路径，
+/// 避免大 JSON 字符串通过 IPC 传输到前端再下载。
+#[tauri::command]
+pub async fn export_data_to_file(
+    target_path: String,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    // 验证目标路径以 .json 结尾
+    if !target_path.ends_with(".json") {
+        return Err(AppError::Param(
+            "导出文件必须以 .json 结尾".to_string(),
+        ));
+    }
+
+    // 复用 export_data 的逻辑生成 JSON
+    let json_str = export_data(state).await?;
+
+    // 写入文件
+    std::fs::write(&target_path, json_str)
+        .map_err(|e| AppError::Internal(format!("写入文件失败: {}", e)))?;
+
+    Ok(())
 }
 
 /// 导入数据
@@ -351,4 +377,72 @@ pub async fn import_data(
     tx.commit().await?;
 
     Ok(result)
+}
+
+/// SQLite 原生备份：使用 VACUUM INTO 生成 .db 完整副本
+///
+/// 优点（相比 JSON 导出）：
+/// - 速度快（10MB < 2s）
+/// - 100% 保留类型信息（二进制格式）
+/// - 不会漏表/字段（整库快照）
+#[tauri::command]
+pub async fn backup_database(
+    target_path: String,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    // 验证目标路径以 .db 或 .sqlite 结尾
+    if !target_path.ends_with(".db") && !target_path.ends_with(".sqlite") {
+        return Err(AppError::Param(
+            "备份文件必须以 .db 或 .sqlite 结尾".to_string(),
+        ));
+    }
+    // VACUUM INTO 不支持参数绑定，需手动转义单引号
+    let escaped = target_path.replace('\'', "''");
+    sqlx::query(&format!("VACUUM INTO '{}'", escaped))
+        .execute(&state.0)
+        .await?;
+    Ok(())
+}
+
+/// SQLite 原生恢复：关闭连接池 → 覆盖 db 文件 → 提示重启
+///
+/// 恢复前自动备份当前 db 到 selfpilot.db.before_restore 作为安全网。
+/// 恢复后连接池已关闭，前端必须提示用户重启应用。
+#[tauri::command]
+pub async fn restore_database(
+    source_path: String,
+    app: AppHandle,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    // 验证源文件存在
+    if !std::path::Path::new(&source_path).exists() {
+        return Err(AppError::Param(format!(
+            "备份文件不存在: {}",
+            source_path
+        )));
+    }
+
+    // 获取当前 db 路径
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Internal(format!("获取应用数据目录失败: {}", e)))?;
+    let db_path = app_dir.join("selfpilot.db");
+    let backup_path = app_dir.join("selfpilot.db.before_restore");
+
+    // 恢复前自动备份当前 db（安全网）
+    if db_path.exists() {
+        std::fs::copy(&db_path, &backup_path).map_err(|e| {
+            AppError::Internal(format!("恢复前备份当前数据库失败: {}", e))
+        })?;
+    }
+
+    // 关闭连接池（后续数据库操作将失败，因此这是最后一步）
+    state.0.close().await;
+
+    // 覆盖 db 文件
+    std::fs::copy(&source_path, &db_path)
+        .map_err(|e| AppError::Internal(format!("覆盖数据库文件失败: {}", e)))?;
+
+    Ok(())
 }

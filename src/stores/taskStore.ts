@@ -8,6 +8,7 @@ import type {
   CompleteTaskInput,
   Encouragement,
   GoalCompletionStat,
+  Task,
 } from "@/types";
 
 export const useTaskStore = defineStore("task", () => {
@@ -52,7 +53,9 @@ export const useTaskStore = defineStore("task", () => {
 
         if (allComplete) {
           // 全部目标完成 → 庆祝鼓励语
-          const enc = await encApi.randomCelebrationEncouragement();
+          const enc = await encApi.randomCelebrationEncouragement(
+            "complete_celebration",
+          );
           if (enc) {
             pendingEncouragement.value = enc;
             isCelebration.value = true;
@@ -62,6 +65,7 @@ export const useTaskStore = defineStore("task", () => {
           const streakInfo = await encApi.getStreak();
           const enc = await encApi.randomEncouragementByStreak(
             streakInfo.current_streak,
+            "complete_first",
           );
           if (enc) {
             pendingEncouragement.value = enc;
@@ -94,9 +98,10 @@ export const useTaskStore = defineStore("task", () => {
     isCelebration.value = false;
   }
 
-  async function skipTask(taskId: string) {
-    await taskApi.skipTask(taskId);
+  async function skipTask(taskId: string): Promise<Task> {
+    const updated = await taskApi.skipTask(taskId);
     await fetchAll();
+    return updated;
   }
 
   return {

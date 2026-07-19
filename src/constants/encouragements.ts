@@ -1,4 +1,8 @@
-// 预设鼓励语（PRD §4.2 模块五：不少于10条）
+/**
+ * @deprecated P0-1：鼓励语源已统一到 DB，本文件不再被任何代码引用。
+ * 保留导出仅供回滚参考，randomEncouragement() 调用会抛错以暴露残留引用。
+ * 应急文案请使用 encouragementStore 内联的 ENCOURAGEMENT_FALLBACK。
+ */
 export const DEFAULT_ENCOURAGEMENTS: string[] = [
   "今天又进步了！",
   "坚持就是胜利，继续加油！",
@@ -12,8 +16,12 @@ export const DEFAULT_ENCOURAGEMENTS: string[] = [
   "种一棵树最好的时间是十年前，其次是现在。",
 ];
 
-/** 随机抽取一句鼓励语 */
+/**
+ * @deprecated 已废弃，请使用 encouragementStore.random()。
+ * 调用会抛错以暴露未迁移的残留引用。
+ */
 export function randomEncouragement(): string {
-  const idx = Math.floor(Math.random() * DEFAULT_ENCOURAGEMENTS.length);
-  return DEFAULT_ENCOURAGEMENTS[idx];
+  throw new Error(
+    "randomEncouragement() 已废弃，请使用 encouragementStore.random()",
+  );
 }

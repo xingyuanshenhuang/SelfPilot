@@ -12,14 +12,15 @@ import {
 import { Icon } from "@iconify/vue";
 import { useTaskStore } from "@/stores/taskStore";
 import { useGoalStore } from "@/stores/goalStore";
+import { useEncouragementStore } from "@/stores/encouragementStore";
 import TaskItem from "@/components/TaskItem.vue";
 import type { TodayTask } from "@/types";
 import ProgressRing from "@/components/ProgressRing.vue";
-import { randomEncouragement } from "@/constants/encouragements";
 import { format } from "date-fns";
 
 const taskStore = useTaskStore();
 const goalStore = useGoalStore();
+const encStore = useEncouragementStore();
 const message = useMessage();
 
 const today = computed(() => format(new Date(), "yyyy-MM-dd"));
@@ -98,7 +99,9 @@ onMounted(async () => {
     goalStore.fetchGoals(),
     goalStore.fetchProgresses(),
   ]);
-  encouragement.value = randomEncouragement();
+  // P0-1：banner 文案改用 encStore.random（统一文案源，含展示去重）
+  const enc = await encStore.random("dashboard_banner");
+  encouragement.value = enc?.text ?? "";
 });
 
 async function refresh() {

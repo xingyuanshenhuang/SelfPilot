@@ -54,6 +54,35 @@ pub async fn calc_goal_progress(pool: &SqlitePool, goal_id: &str) -> AppResult<P
     })
 }
 
+/// 计算目标及其所有祖先的进度（P2-3：局部更新专用）
+///
+/// 给定 goal_id，向上遍历 parent_id 链，收集自身及所有祖先的 ProgressInfo。
+/// 用于写操作后只重算受影响的祖先链，而非全量重算所有目标进度。
+///
+/// 例如：完成一个任务后，需更新该任务所属目标 + 其父目标 + 祖父目标 ... 的进度。
+/// 相比 `calc_all_goals_progress`（扫描所有目标的所有任务），此函数仅扫描祖先链上
+/// 每个目标的子孙任务，大幅减少 SQL 查询量。
+pub async fn calc_goal_ancestors_progress(
+    pool: &SqlitePool,
+    goal_id: &str,
+) -> AppResult<Vec<ProgressInfo>> {
+    let mut result = Vec::new();
+    let mut current_id: Option<String> = Some(goal_id.to_string());
+
+    while let Some(id) = current_id {
+        let progress = calc_goal_progress(pool, &id).await?;
+        // 查询父目标 ID（向上遍历祖先链）
+        current_id = sqlx::query_scalar("SELECT parent_id FROM goals WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+        result.push(progress);
+    }
+
+    Ok(result)
+}
+
 /// 计算所有目标的进度（批量优化：一次查询，内存计算）
 pub async fn calc_all_goals_progress(pool: &SqlitePool) -> AppResult<Vec<ProgressInfo>> {
     // 1. 查询所有目标

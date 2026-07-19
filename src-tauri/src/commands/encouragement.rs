@@ -1,9 +1,128 @@
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::models::{AddEncouragementInput, Encouragement, StreakInfo};
+use crate::db::models::{AddEncouragementInput, Encouragement, StreakInfo, UpdateEncouragementInput};
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+use sqlx::QueryBuilder;
+
+/// 鼓励语展示历史去重窗口：最近 N 条不重复
+const DEDUP_WINDOW: i64 = 5;
+
+/// 校验等级合法性，返回归一化后的等级字符串
+fn validate_level(level: &Option<String>) -> AppResult<String> {
+    match level.as_deref().unwrap_or("normal") {
+        "normal" | "advanced" | "highlight" | "celebration" => {
+            Ok(level.as_deref().unwrap_or("normal").to_string())
+        }
+        _ => Err(AppError::Param(
+            "等级无效，应为 normal/advanced/highlight/celebration".into(),
+        )),
+    }
+}
+
+// ============================================================
+// P0-3 辅助函数：统一降级链与去重抽取
+// ============================================================
+
+/// 从指定等级桶中随机抽取一条，排除指定 ids
+async fn pick_by_level(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    level: &str,
+    exclude_ids: &[String],
+) -> AppResult<Option<Encouragement>> {
+    let mut builder =
+        QueryBuilder::<sqlx::Sqlite>::new("SELECT * FROM encouragements WHERE level = ");
+    builder.push_bind(level);
+    if !exclude_ids.is_empty() {
+        builder.push(" AND id NOT IN (");
+        let mut sep = builder.separated(", ");
+        for id in exclude_ids {
+            sep.push_bind(id);
+        }
+        builder.push(")");
+    }
+    builder.push(" ORDER BY RANDOM() LIMIT 1");
+    let item: Option<Encouragement> = builder
+        .build_query_as::<Encouragement>()
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(item)
+}
+
+/// 从全库随机抽取一条，排除指定 ids（无等级过滤）
+async fn pick_any(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    exclude_ids: &[String],
+) -> AppResult<Option<Encouragement>> {
+    let mut builder = QueryBuilder::<sqlx::Sqlite>::new("SELECT * FROM encouragements");
+    if !exclude_ids.is_empty() {
+        builder.push(" WHERE id NOT IN (");
+        let mut sep = builder.separated(", ");
+        for id in exclude_ids {
+            sep.push_bind(id);
+        }
+        builder.push(")");
+    }
+    builder.push(" ORDER BY RANDOM() LIMIT 1");
+    let item: Option<Encouragement> = builder
+        .build_query_as::<Encouragement>()
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(item)
+}
+
+/// 按 levels 顺序依次尝试抽取，首个非空即返回；全部为空返回 None
+async fn random_with_fallback(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    levels: &[&str],
+    exclude_ids: &[String],
+) -> AppResult<Option<Encouragement>> {
+    for level in levels {
+        if let Some(item) = pick_by_level(tx, level, exclude_ids).await? {
+            return Ok(Some(item));
+        }
+    }
+    Ok(None)
+}
+
+/// 查询最近 DEDUP_WINDOW 条展示记录的 encouragement_id（去重排除列表）
+async fn recent_shown_ids(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> AppResult<Vec<String>> {
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT encouragement_id FROM encouragement_show_log ORDER BY shown_at DESC LIMIT ?")
+            .bind(DEDUP_WINDOW)
+            .fetch_all(&mut **tx)
+            .await?;
+    Ok(ids)
+}
+
+/// 抽取成功后写入展示日志
+async fn log_show(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    encouragement_id: &str,
+    trigger_source: &str,
+) -> AppResult<()> {
+    let log_id = Uuid::new_v4().to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3f")
+        .to_string();
+    sqlx::query(
+        "INSERT INTO encouragement_show_log (id, encouragement_id, shown_at, trigger_source) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&log_id)
+    .bind(encouragement_id)
+    .bind(&now)
+    .bind(trigger_source)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+// ============================================================
+// 命令实现
+// ============================================================
 
 /// 列出所有鼓励语
 #[tauri::command]
@@ -25,27 +144,19 @@ pub async fn add_encouragement(
         return Err(AppError::Param("鼓励语内容不能为空".into()));
     }
 
-    // 等级校验，默认 normal
-    let level = match input.level.as_deref().unwrap_or("normal") {
-        "normal" | "advanced" | "highlight" | "celebration" => {
-            input.level.as_deref().unwrap_or("normal")
-        }
-        _ => {
-            return Err(AppError::Param(
-                "等级无效，应为 normal/advanced/highlight/celebration".into(),
-            ));
-        }
-    };
+    let level = validate_level(&input.level)?;
 
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string();
 
     sqlx::query(
         "INSERT INTO encouragements (id, text, category, level, created_at) VALUES (?, ?, 'custom', ?, ?)",
     )
     .bind(&id)
     .bind(&input.text)
-    .bind(level)
+    .bind(&level)
     .bind(&now)
     .execute(&state.0)
     .await?;
@@ -58,7 +169,79 @@ pub async fn add_encouragement(
     Ok(item)
 }
 
+/// 更新自定义鼓励语（P0-5：补齐编辑功能）
+///
+/// - 仅自定义文案可修改文本与等级，预设文案拒绝修改
+/// - text 非空且字符数 2~100（用 chars().count() 计算中文长度）
+/// - level 合法性校验
+/// - 使用事务保证读取-校验-更新原子性
+#[tauri::command]
+pub async fn update_encouragement(
+    input: UpdateEncouragementInput,
+    state: State<'_, DbPool>,
+) -> AppResult<Encouragement> {
+    let mut tx = state.0.begin().await?;
+
+    // 1. 查记录
+    let item: Encouragement =
+        sqlx::query_as("SELECT * FROM encouragements WHERE id = ?")
+            .bind(&input.id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("鼓励语 {} 不存在", input.id)))?;
+
+    // 2. 校验非预设
+    if item.category == "preset" {
+        return Err(AppError::Business("预设鼓励语不允许修改".into()));
+    }
+
+    // 3. 校验 text（用 chars().count() 计算字符数，中文友好）
+    let new_text = match &input.text {
+        Some(t) => {
+            let trimmed = t.trim();
+            let char_count = trimmed.chars().count();
+            if char_count < 2 {
+                return Err(AppError::Param("鼓励语至少 2 个字".into()));
+            }
+            if char_count > 100 {
+                return Err(AppError::Param("鼓励语不超过 100 字".into()));
+            }
+            if trimmed.is_empty() {
+                return Err(AppError::Param("鼓励语内容不能为空".into()));
+            }
+            t.clone()
+        }
+        None => item.text.clone(),
+    };
+
+    // 4. 校验 level
+    let new_level = match &input.level {
+        Some(l) => validate_level(&Some(l.clone()))?,
+        None => item.level.clone(),
+    };
+
+    // 5. 更新
+    sqlx::query("UPDATE encouragements SET text = ?, level = ? WHERE id = ?")
+        .bind(&new_text)
+        .bind(&new_level)
+        .bind(&input.id)
+        .execute(&mut *tx)
+        .await?;
+
+    // 6. 读取最新记录
+    let updated: Encouragement = sqlx::query_as("SELECT * FROM encouragements WHERE id = ?")
+        .bind(&input.id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(updated)
+}
+
 /// 删除鼓励语（预设鼓励语不允许删除）
+///
+/// P0-4：因 foreign_keys pragma 未启用，需显式删除 encouragement_show_log 关联记录
 #[tauri::command]
 pub async fn delete_encouragement(id: String, state: State<'_, DbPool>) -> AppResult<()> {
     let item: Encouragement = sqlx::query_as("SELECT * FROM encouragements WHERE id = ?")
@@ -71,6 +254,12 @@ pub async fn delete_encouragement(id: String, state: State<'_, DbPool>) -> AppRe
         return Err(AppError::Business("预设鼓励语不允许删除".into()));
     }
 
+    // P0-4：显式删除展示历史（FK 级联未启用）
+    sqlx::query("DELETE FROM encouragement_show_log WHERE encouragement_id = ?")
+        .bind(&id)
+        .execute(&state.0)
+        .await?;
+
     sqlx::query("DELETE FROM encouragements WHERE id = ?")
         .bind(&id)
         .execute(&state.0)
@@ -79,15 +268,35 @@ pub async fn delete_encouragement(id: String, state: State<'_, DbPool>) -> AppRe
     Ok(())
 }
 
-/// 随机抽取一句鼓励语
+/// 随机抽取一句鼓励语（全等级，含展示去重）
+///
+/// P0-3 + P0-4：
+/// - 事务保证 SELECT + INSERT 原子性，防止并发竞态
+/// - 排除最近 DEDUP_WINDOW 条展示记录
+/// - 抽取成功后写入展示日志
 #[tauri::command]
-pub async fn random_encouragement(state: State<'_, DbPool>) -> AppResult<Option<Encouragement>> {
-    // SQLite 的 ORDER BY RANDOM() LIMIT 1
-    let item: Option<Encouragement> =
-        sqlx::query_as("SELECT * FROM encouragements ORDER BY RANDOM() LIMIT 1")
-            .fetch_optional(&state.0)
-            .await?;
-    Ok(item)
+pub async fn random_encouragement(
+    trigger_source: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Option<Encouragement>> {
+    let mut tx = state.0.begin().await?;
+
+    let exclude_ids = recent_shown_ids(&mut tx).await?;
+
+    // 全库随机（无等级过滤），优先排除最近展示过的
+    let item = pick_any(&mut tx, &exclude_ids).await?;
+
+    match item {
+        Some(item) => {
+            log_show(&mut tx, &item.id, &trigger_source).await?;
+            tx.commit().await?;
+            Ok(Some(item))
+        }
+        None => {
+            tx.rollback().await?;
+            Ok(None)
+        }
+    }
 }
 
 /// 根据当前连续天数智能选择鼓励语等级
@@ -96,14 +305,21 @@ pub async fn random_encouragement(state: State<'_, DbPool>) -> AppResult<Option<
 /// - 连续 1 天 → normal 普通
 /// - 连续 3 天 → advanced 进阶
 /// - 连续 7 天 → highlight 高亮
-/// - 该等级无鼓励语时降级到 normal
+///
+/// P0-3：统一降级链为 `目标等级 → normal → 全库`
+/// P0-4：排除最近 DEDUP_WINDOW 条展示记录，事务保证原子性
 #[tauri::command]
 pub async fn random_encouragement_by_streak(
     streak: i64,
+    trigger_source: String,
     state: State<'_, DbPool>,
 ) -> AppResult<Option<Encouragement>> {
-    // 根据连续天数确定等级
-    let level = if streak >= 7 {
+    let mut tx = state.0.begin().await?;
+
+    let exclude_ids = recent_shown_ids(&mut tx).await?;
+
+    // 确定目标等级
+    let target_level = if streak >= 7 {
         "highlight"
     } else if streak >= 3 {
         "advanced"
@@ -111,54 +327,68 @@ pub async fn random_encouragement_by_streak(
         "normal"
     };
 
-    // 优先从对应等级抽取
-    let item: Option<Encouragement> =
-        sqlx::query_as("SELECT * FROM encouragements WHERE level = ? ORDER BY RANDOM() LIMIT 1")
-            .bind(level)
-            .fetch_optional(&state.0)
-            .await?;
+    // 降级链：目标等级 → normal → （全库兜底）
+    let levels: Vec<&str> = if target_level == "normal" {
+        vec!["normal"]
+    } else {
+        vec![target_level, "normal"]
+    };
 
-    // 对应等级无鼓励语时降级到 normal
-    if item.is_none() && level != "normal" {
-        let fallback: Option<Encouragement> =
-            sqlx::query_as("SELECT * FROM encouragements WHERE level = 'normal' ORDER BY RANDOM() LIMIT 1")
-                .fetch_optional(&state.0)
-                .await?;
-        return Ok(fallback);
+    let item = random_with_fallback(&mut tx, &levels, &exclude_ids).await?;
+
+    // 全库兜底
+    let item = match item {
+        Some(_) => item,
+        None => pick_any(&mut tx, &exclude_ids).await?,
+    };
+
+    match item {
+        Some(item) => {
+            log_show(&mut tx, &item.id, &trigger_source).await?;
+            tx.commit().await?;
+            Ok(Some(item))
+        }
+        None => {
+            tx.rollback().await?;
+            Ok(None)
+        }
     }
-
-    // 仍无则从全部抽取
-    if item.is_none() {
-        let any: Option<Encouragement> =
-            sqlx::query_as("SELECT * FROM encouragements ORDER BY RANDOM() LIMIT 1")
-                .fetch_optional(&state.0)
-                .await?;
-        return Ok(any);
-    }
-
-    Ok(item)
 }
 
 /// 抽取庆祝鼓励语（全部目标完成时使用）
+///
+/// P0-3：统一降级链为 `celebration → highlight → advanced → normal → 全库`
+/// P0-4：排除最近 DEDUP_WINDOW 条展示记录，事务保证原子性
 #[tauri::command]
 pub async fn random_celebration_encouragement(
+    trigger_source: String,
     state: State<'_, DbPool>,
 ) -> AppResult<Option<Encouragement>> {
-    let item: Option<Encouragement> =
-        sqlx::query_as("SELECT * FROM encouragements WHERE level = 'celebration' ORDER BY RANDOM() LIMIT 1")
-            .fetch_optional(&state.0)
-            .await?;
+    let mut tx = state.0.begin().await?;
 
-    // 无庆祝鼓励语时降级到 highlight
-    if item.is_none() {
-        let fallback: Option<Encouragement> =
-            sqlx::query_as("SELECT * FROM encouragements WHERE level = 'highlight' ORDER BY RANDOM() LIMIT 1")
-                .fetch_optional(&state.0)
-                .await?;
-        return Ok(fallback);
+    let exclude_ids = recent_shown_ids(&mut tx).await?;
+
+    // 逐级降级：celebration → highlight → advanced → normal
+    let levels = vec!["celebration", "highlight", "advanced", "normal"];
+    let item = random_with_fallback(&mut tx, &levels, &exclude_ids).await?;
+
+    // 全库兜底
+    let item = match item {
+        Some(_) => item,
+        None => pick_any(&mut tx, &exclude_ids).await?,
+    };
+
+    match item {
+        Some(item) => {
+            log_show(&mut tx, &item.id, &trigger_source).await?;
+            tx.commit().await?;
+            Ok(Some(item))
+        }
+        None => {
+            tx.rollback().await?;
+            Ok(None)
+        }
     }
-
-    Ok(item)
 }
 
 /// 获取连续完成天数统计

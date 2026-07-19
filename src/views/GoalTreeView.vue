@@ -24,6 +24,7 @@ import { Icon } from "@iconify/vue";
 import { useGoalStore } from "@/stores/goalStore";
 import * as taskApi from "@/api/task";
 import * as goalApi from "@/api/goal";
+import * as statsApi from "@/api/stats";
 import type {
   Goal,
   GoalTreeNode,
@@ -208,7 +209,12 @@ async function handleSaveGoal() {
       if (createGoalParentId.value) {
         expandedNodes.value.add(createGoalParentId.value);
       }
+      // 创建模式：新节点需全量重拉以正确初始化树结构和排序
+      showGoalModal.value = false;
+      await goalStore.fetchGoalTree();
+      await goalStore.fetchProgresses();
     } else {
+      // 编辑模式：P2-3 局部更新，避免全量重拉
       const input: UpdateGoalInput = {
         id: editingGoalId.value,
         name: goalForm.name,
@@ -217,12 +223,13 @@ async function handleSaveGoal() {
         unit: goalForm.unit,
         daily_capacity: goalForm.daily_capacity,
       };
-      await goalApi.updateGoal(input);
+      const updated = await goalApi.updateGoal(input);
       message.success("目标已更新");
+      showGoalModal.value = false;
+      goalStore.updateGoalLocally(updated);
+      // total_qty 变化会影响进度，需刷新祖先链
+      await goalStore.refreshProgressForGoalChain(updated.id);
     }
-    showGoalModal.value = false;
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
   } catch (e) {
     message.error(String(e));
   }
@@ -602,6 +609,47 @@ async function handleSmartSplit() {
   }
 
   try {
+    // P2-5：拆解前检查目标日期范围内的负载
+    const todayStr = format(new Date(), "yyyy-MM-dd");
+    let rangeStart = todayStr;
+    let rangeEnd = todayStr;
+    if (splitForm.strategy === "by_deadline") {
+      rangeEnd = input.deadline!;
+    } else if (splitForm.strategy === "by_capacity") {
+      rangeEnd = input.deadline!;
+    } else if (splitForm.strategy === "by_date_range") {
+      rangeStart = input.start_date!;
+      rangeEnd = input.end_date!;
+    }
+
+    const LOAD_THRESHOLD = 5;
+    const loads = await statsApi.getDailyLoad(rangeStart, rangeEnd);
+    const overloaded = loads.filter((l) => l.total_tasks >= LOAD_THRESHOLD);
+
+    if (overloaded.length > 0) {
+      const detail = overloaded
+        .slice(0, 5)
+        .map((l) => `${l.date}：${l.total_tasks} 个任务`)
+        .join("\n");
+      const more =
+        overloaded.length > 5 ? `\n... 等共 ${overloaded.length} 天` : "";
+
+      const confirmed = await new Promise<boolean>((resolve) => {
+        dialog.warning({
+          title: "负载警告",
+          content: `以下日期任务较多：\n${detail}${more}\n\n继续拆解可能导致这些日期任务过载。是否继续？`,
+          positiveText: "继续拆解",
+          negativeText: "取消",
+          onPositiveClick: () => resolve(true),
+          onNegativeClick: () => resolve(false),
+          onClose: () => resolve(false),
+          onMaskClick: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+    }
+
+    // 执行拆解
     const tasks = await goalStore.smartSplit(input);
     message.success(`已拆解为 ${tasks.length} 个每日任务`);
     showSplitModal.value = false;
@@ -713,7 +761,12 @@ async function handleSaveTask() {
           }
         }
       }
+      // 创建模式：批量生成或新任务排序需全量重拉校准
+      showTaskModal.value = false;
+      await goalStore.fetchGoalTree();
+      await goalStore.fetchProgresses();
     } else {
+      // 编辑模式：P2-3 局部更新，避免全量重拉
       const plan_date = taskForm.plan_date
         ? format(new Date(taskForm.plan_date), "yyyy-MM-dd")
         : null;
@@ -723,7 +776,7 @@ async function handleSaveTask() {
         plan_date: plan_date ?? "",
         plan_qty: taskForm.plan_qty,
       };
-      await taskApi.updateTask(input);
+      const updated = await taskApi.updateTask(input);
       // 同步前置依赖（对比编辑前后的 dependency_ids）
       const depOk = await syncDependencies();
       if (!depOk) {
@@ -731,10 +784,11 @@ async function handleSaveTask() {
         return;
       }
       message.success("任务已更新");
+      showTaskModal.value = false;
+      goalStore.updateTaskLocally(updated);
+      // plan_qty 变化会影响进度，需刷新祖先链
+      await goalStore.refreshProgressForGoalChain(updated.goal_id);
     }
-    showTaskModal.value = false;
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
   } catch (e) {
     message.error(String(e));
   }
@@ -800,13 +854,14 @@ async function openEditTaskModal(task: Task) {
 // ===== 任务操作 =====
 async function handleCompleteTask(task: Task) {
   try {
-    await taskApi.completeTask({
+    const updated = await taskApi.completeTask({
       task_id: task.id,
       actual_qty: task.plan_qty,
     });
     message.success("任务已完成");
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
+    // P2-3：局部更新任务 + 刷新祖先链进度，避免全量重拉
+    goalStore.updateTaskLocally(updated);
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
   } catch (e) {
     message.error(String(e));
   }
@@ -814,10 +869,11 @@ async function handleCompleteTask(task: Task) {
 
 async function handleSkipTask(task: Task) {
   try {
-    await taskApi.skipTask(task.id);
+    const updated = await taskApi.skipTask(task.id);
     message.success("任务已跳过");
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
+    // P2-3：局部更新任务 + 刷新祖先链进度
+    goalStore.updateTaskLocally(updated);
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
   } catch (e) {
     message.error(String(e));
   }
@@ -835,14 +891,15 @@ function openBackfillModal(task: Task) {
 
 async function handleConfirmBackfill() {
   try {
-    await taskApi.backfillTask({
+    const updated = await taskApi.backfillTask({
       task_id: backfillForm.task_id,
       actual_qty: backfillForm.actual_qty,
     });
     message.success("补完成已保存");
     showBackfillModal.value = false;
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
+    // P2-3：局部更新任务 + 刷新祖先链进度
+    goalStore.updateTaskLocally(updated);
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
   } catch (e) {
     message.error(String(e));
   }
@@ -875,10 +932,11 @@ function getBatchTasks(task: Task): Task[] {
 
 async function handleDeleteTask(task: Task) {
   try {
-    await taskApi.deleteTask(task.id);
+    const result = await taskApi.deleteTask(task.id);
     message.success("任务已删除");
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
+    // P2-3：局部移除任务 + 刷新祖先链进度
+    goalStore.removeTaskLocally(result.task_id);
+    await goalStore.refreshProgressForGoalChain(result.goal_id);
   } catch (e) {
     message.error(String(e));
   }
@@ -887,10 +945,16 @@ async function handleDeleteTask(task: Task) {
 /** 批量删除同批生成的关联任务 */
 async function handleDeleteBatch(tasks: Task[]) {
   try {
-    await Promise.all(tasks.map((t) => taskApi.deleteTask(t.id)));
-    message.success(`已删除 ${tasks.length} 个关联任务`);
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
+    // 单事务批量删除，避免 N 次 IPC 撑爆通道
+    const result = await taskApi.deleteTasksBatch(tasks.map((t) => t.id));
+    message.success(`已删除 ${result.deleted_count} 个关联任务`);
+    // P2-3：局部移除每个任务 + 刷新所有受影响目标的祖先链进度
+    for (const t of tasks) {
+      goalStore.removeTaskLocally(t.id);
+    }
+    for (const goalId of result.affected_goal_ids) {
+      await goalStore.refreshProgressForGoalChain(goalId);
+    }
   } catch (e) {
     message.error(String(e));
   }

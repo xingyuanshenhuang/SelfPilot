@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>负载等级视觉指示器设计方案 — SelfPilot</title>
+<style>
+  :root {
+    /* 品牌色（与 uno.config.ts 一致） */
+    --brand-50: #eef6ff;
+    --brand-100: #d9eaff;
+    --brand-200: #bcd9ff;
+    --brand-500: #3478f6;
+    --brand-600: #1f5ae0;
+    --brand-700: #1947b8;
+
+    /* 负载等级色系（4 级） */
+    --load-none: #9ca3af;
+    --load-low: #22c55e; /* green-500 */
+    --load-low-bg: #f0fdf4;
+    --load-low-soft: rgba(34, 197, 94, 0.15);
+    --load-medium: #f59e0b; /* amber-500 */
+    --load-medium-bg: #fffbeb;
+    --load-medium-soft: rgba(245, 158, 11, 0.15);
+    --load-high: #ef4444; /* red-500 */
+    --load-high-bg: #fef2f2;
+    --load-high-soft: rgba(239, 68, 68, 0.15);
+    --load-extreme: #9333ea; /* purple-600 */
+    --load-extreme-bg: #faf5ff;
+    --load-extreme-soft: rgba(147, 51, 234, 0.15);
+
+    --max-capacity: 12; /* 满负载参考值（用于百分比/填充高度计算） */
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    background: #f9fafb;
+    color: #1f2937;
+    line-height: 1.6;
+    padding: 32px 24px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  /* ===== Header ===== */
+  header {
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 2px solid #e5e7eb;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background: var(--brand-50);
+    color: var(--brand-600);
+    border: 1px solid var(--brand-100);
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 700;
+    color: #111827;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  header p {
+    color: #6b7280;
+    font-size: 15px;
+    max-width: 720px;
+  }
+
+  h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #111827;
+    margin: 40px 0 16px;
+    letter-spacing: -0.01em;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 6px;
+  }
+  section p.intro {
+    color: #4b5563;
+    font-size: 14px;
+    margin-bottom: 16px;
+    max-width: 760px;
+  }
+
+  /* ===== 色彩系统 ===== */
+  .level-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .level-card {
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    background: white;
+    text-align: center;
+  }
+  .level-swatch {
+    width: 100%;
+    height: 36px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+  .level-name {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .level-range {
+    font-size: 11px;
+    color: #6b7280;
+  }
+  .level-hex {
+    font-size: 10px;
+    color: #9ca3af;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    margin-top: 4px;
+  }
+
+  /* ===== Demo 行 ===== */
+  .demo-row {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin: 20px 0;
+    flex-wrap: wrap;
+    padding: 20px;
+    background: white;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+  }
+  .demo-cell-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .demo-label {
+    font-size: 11px;
+    color: #6b7280;
+    font-weight: 500;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .demo-label strong {
+    color: #374151;
+    font-weight: 700;
+  }
+
+  /* ===== 日历单元格 mock（与真实 CalendarView 月格尺寸一致） ===== */
+  .cal-cell {
+    width: 92px;
+    min-height: 96px;
+    border: 1px solid #f3f4f6;
+    border-radius: 10px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    position: relative;
+    overflow: hidden;
+    transition:
+      transform 0.15s,
+      box-shadow 0.2s;
+  }
+  .cal-cell:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  }
+  .cal-cell-date {
+    font-size: 14px;
+    font-weight: 600;
+    color: #374151;
+    line-height: 1;
+  }
+  .cal-cell.today {
+    background: rgba(238, 246, 255, 0.6);
+    border-color: var(--brand-200);
+  }
+  .cal-cell.today .cal-cell-date {
+    color: var(--brand-600);
+    font-weight: 700;
+    font-size: 16px;
+  }
+  .cal-cell-dots {
+    display: flex;
+    gap: 2px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 70px;
+  }
+  .cal-cell-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: #d1d5db;
+  }
+
+  /* ===== 通用负载色调（用于背景 tint 选项） ===== */
+  .tint-low {
+    background: var(--load-low-bg);
+  }
+  .tint-medium {
+    background: var(--load-medium-bg);
+  }
+  .tint-high {
+    background: var(--load-high-bg);
+  }
+  .tint-extreme {
+    background: var(--load-extreme-bg);
+  }
+
+  /* ========================================= */
+  /* === 方案 A：容量胶囊徽标 === */
+  /* ========================================= */
+  .design-a .pill {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    font-variant-numeric: tabular-nums;
+  }
+  .pill-low {
+    background: var(--load-low);
+  }
+  .pill-medium {
+    background: var(--load-medium);
+  }
+  .pill-high {
+    background: var(--load-high);
+  }
+  .pill-extreme {
+    background: var(--load-extreme);
+  }
+
+  /* ========================================= */
+  /* === 方案 B：垂直填充条（左侧"温度计"） === */
+  /* ========================================= */
+  .design-b .vbar-track {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    background: #f3f4f6;
+  }
+  .design-b .vbar-fill {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 5px;
+    border-radius: 0 4px 4px 0;
+    transition: height 0.3s ease;
+  }
+  .design-b .vbar-num {
+    position: absolute;
+    bottom: 5px;
+    left: 9px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #374151;
+    font-variant-numeric: tabular-nums;
+  }
+  .vbar-fill-low {
+    background: var(--load-low);
+  }
+  .vbar-fill-medium {
+    background: var(--load-medium);
+  }
+  .vbar-fill-high {
+    background: var(--load-high);
+  }
+  .vbar-fill-extreme {
+    background: var(--load-extreme);
+  }
+
+  /* ========================================= */
+  /* === 方案 C：信号强度条（4 格） === */
+  /* ========================================= */
+  .design-c .signal {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    display: flex;
+    align-items: flex-end;
+    gap: 1.5px;
+    height: 16px;
+  }
+  .design-c .signal span {
+    width: 3px;
+    border-radius: 1px;
+    background: #e5e7eb;
+    transition: background 0.2s;
+  }
+  .design-c .signal span:nth-child(1) {
+    height: 4px;
+  }
+  .design-c .signal span:nth-child(2) {
+    height: 8px;
+  }
+  .design-c .signal span:nth-child(3) {
+    height: 12px;
+  }
+  .design-c .signal span:nth-child(4) {
+    height: 16px;
+  }
+  .signal-low span:nth-child(1) {
+    background: var(--load-low) !important;
+  }
+  .signal-medium span:nth-child(-n + 2) {
+    background: var(--load-medium) !important;
+  }
+  .signal-high span:nth-child(-n + 3) {
+    background: var(--load-high) !important;
+  }
+  .signal-extreme span {
+    background: var(--load-extreme) !important;
+  }
+  .design-c .signal-num {
+    position: absolute;
+    top: 24px;
+    right: 5px;
+    font-size: 9px;
+    font-weight: 600;
+    color: #6b7280;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ========================================= */
+  /* === 方案 D：圆环仪表盘 === */
+  /* ========================================= */
+  .design-d .ring {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 26px;
+    height: 26px;
+  }
+  .design-d .ring svg {
+    transform: rotate(-90deg);
+  }
+  .design-d .ring-num {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ========================================= */
+  /* === 方案 E：堆叠迷你方块（10 格进度） === */
+  /* ========================================= */
+  .design-e .blocks {
+    display: flex;
+    gap: 2px;
+    margin-top: 6px;
+    justify-content: center;
+  }
+  .design-e .block {
+    width: 6px;
+    height: 8px;
+    border-radius: 1.5px;
+    background: #e5e7eb;
+    transition: background 0.2s;
+  }
+  .design-e .block-count {
+    font-size: 9px;
+    color: #6b7280;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  /* ========================================= */
+  /* === 方案 F：仪表图标 + 等级标签 === */
+  /* ========================================= */
+  .design-f .gauge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px 2px 4px;
+    border-radius: 9999px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .design-f .gauge svg {
+    width: 12px;
+    height: 12px;
+  }
+  .gauge-low {
+    color: var(--load-low);
+    border-color: var(--load-low) !important;
+    background: var(--load-low-bg);
+  }
+  .gauge-medium {
+    color: var(--load-medium);
+    border-color: var(--load-medium) !important;
+    background: var(--load-medium-bg);
+  }
+  .gauge-high {
+    color: var(--load-high);
+    border-color: var(--load-high) !important;
+    background: var(--load-high-bg);
+  }
+  .gauge-extreme {
+    color: var(--load-extreme);
+    border-color: var(--load-extreme) !important;
+    background: var(--load-extreme-bg);
+  }
+
+  /* ===== 优缺点 ===== */
+  .pros-cons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .pros,
+  .cons {
+    padding: 14px 16px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+  }
+  .pros h4,
+  .cons h4 {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pros h4 {
+    color: #16a34a;
+  }
+  .cons h4 {
+    color: #dc2626;
+  }
+  .pros ul,
+  .cons ul {
+    list-style: none;
+    font-size: 12.5px;
+    color: #4b5563;
+  }
+  .pros li,
+  .cons li {
+    padding: 3px 0;
+    padding-left: 14px;
+    position: relative;
+  }
+  .pros li::before {
+    content: "+";
+    position: absolute;
+    left: 0;
+    color: #16a34a;
+    font-weight: 700;
+  }
+  .cons li::before {
+    content: "−";
+    position: absolute;
+    left: 0;
+    color: #dc2626;
+    font-weight: 700;
+  }
+
+  /* ===== 对比表 ===== */
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    font-size: 13px;
+  }
+  .comparison-table th,
+  .comparison-table td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid #f3f4f6;
+    vertical-align: middle;
+  }
+  .comparison-table th {
+    background: #f9fafb;
+    font-weight: 700;
+    color: #374151;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .comparison-table tr:last-child td {
+    border-bottom: none;
+  }
+  .comparison-table tr:hover td {
+    background: #fafbfc;
+  }
+  .score {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .score-5 {
+    background: #dcfce7;
+    color: #15803d;
+  }
+  .score-4 {
+    background: #fef9c3;
+    color: #a16207;
+  }
+  .score-3 {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+  .star {
+    color: #f59e0b;
+  }
+
+  /* ===== 推荐 ===== */
+  .recommendation {
+    background: linear-gradient(135deg, #eef6ff 0%, #f0fdf4 100%);
+    border: 1px solid var(--brand-200);
+    border-radius: 16px;
+    padding: 28px;
+    margin-top: 40px;
+  }
+  .recommendation h2 {
+    margin-top: 0;
+    color: var(--brand-700);
+  }
+  .recommendation-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 16px;
+  }
+  .rec-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid #e5e7eb;
+  }
+  .rec-card h3 {
+    color: var(--brand-600);
+    margin-bottom: 8px;
+  }
+  .rec-card .rank {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--brand-50);
+    color: var(--brand-600);
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 768px) {
+    .level-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .pros-cons,
+    .recommendation-grid {
+      grid-template-columns: 1fr;
+    }
+    .demo-row {
+      gap: 10px;
+      padding: 14px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <span class="badge">SelfPilot · 日历视图 · P2-5 负载可视化</span>
+    <h1>负载等级视觉指示器设计方案</h1>
+    <p>
+      替代当前月格顶部 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px;">h-1 w-full rounded-full</code> 细色条（1px 高 + yellow-300 等浅色，视觉权重过低易被忽略）。本方案探索 6 套替代设计，统一 4 级负载等级（无/低/中/高/极高），在 92×96px 月格内提供清晰的视觉反馈。
+    </p>
+  </header>
+
+  <!-- ===== 色彩系统 ===== -->
+  <section>
+    <h2>负载等级色彩系统</h2>
+    <p class="intro">
+      新增"极高"等级（紫色，与红色明确区分）。阈值建议：<strong>低 1-3 / 中 4-6 / 高 7-10 / 极高 ≥11</strong>。满负载参考值 12（用于百分比/填充高度计算）。
+    </p>
+    <div class="level-grid">
+      <div class="level-card">
+        <div class="level-swatch" style="background: #f3f4f6; border: 1px dashed #d1d5db;"></div>
+        <div class="level-name" style="color: #6b7280;">无</div>
+        <div class="level-range">0 个任务</div>
+        <div class="level-hex">—</div>
+      </div>
+      <div class="level-card">
+        <div class="level-swatch" style="background: var(--load-low);"></div>
+        <div class="level-name" style="color: var(--load-low);">低</div>
+        <div class="level-range">1-3 个任务</div>
+        <div class="level-hex">#22c55e</div>
+      </div>
+      <div class="level-card">
+        <div class="level-swatch" style="background: var(--load-medium);"></div>
+        <div class="level-name" style="color: var(--load-medium);">中</div>
+        <div class="level-range">4-6 个任务</div>
+        <div class="level-hex">#f59e0b</div>
+      </div>
+      <div class="level-card">
+        <div class="level-swatch" style="background: var(--load-high);"></div>
+        <div class="level-name" style="color: var(--load-high);">高</div>
+        <div class="level-range">7-10 个任务</div>
+        <div class="level-hex">#ef4444</div>
+      </div>
+      <div class="level-card">
+        <div class="level-swatch" style="background: var(--load-extreme);"></div>
+        <div class="level-name" style="color: var(--load-extreme);">极高</div>
+        <div class="level-range">≥11 个任务</div>
+        <div class="level-hex">#9333ea</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 A ===== -->
+  <section class="design-a">
+    <h2>方案 A · 容量胶囊徽标 <span style="font-size:14px;color:#6b7280;font-weight:500;">Pill Badge</span></h2>
+    <p class="intro">
+      右上角圆角胶囊，直接显示任务数。背景色按等级着色，白色数字。最直观的信息密度——一眼看到"几个任务"+"什么等级"。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+          <div class="cal-cell-dots"></div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="pill pill-low">2</div>
+          <div class="cal-cell-date">15</div>
+          <div class="cal-cell-dots"><span></span><span></span></div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="pill pill-medium">5</div>
+          <div class="cal-cell-date">15</div>
+          <div class="cal-cell-dots"><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="pill pill-high">8</div>
+          <div class="cal-cell-date">15</div>
+          <div class="cal-cell-dots"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="pill pill-extreme">12</div>
+          <div class="cal-cell-date">15</div>
+          <div class="cal-cell-dots"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>信息密度最高：数字 + 颜色双通道</li>
+          <li>扫视即知"几个任务"，无需 hover</li>
+          <li>实现简单，纯 CSS + 1 个元素</li>
+          <li>色彩饱和度高，对比度强</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>占用右上角空间，可能与今日小蓝点冲突</li>
+          <li>胶囊视觉权重较大，弱化日期数字</li>
+          <li>数字过大时（如"12"）胶囊变宽</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 B ===== -->
+  <section class="design-b">
+    <h2>方案 B · 垂直填充条 <span style="font-size:14px;color:#6b7280;font-weight:500;">Vertical Fill Bar · 温度计式</span></h2>
+    <p class="intro">
+      左侧 5px 垂直条，高度 = 任务数/满负载（12）。底部显示数字。类似温度计/油量表，"填充程度"隐喻直观。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="vbar-track"></div>
+          <div class="vbar-fill vbar-fill-low" style="height: 16.7%;"></div>
+          <div class="vbar-num">2</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低 · 17%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="vbar-track"></div>
+          <div class="vbar-fill vbar-fill-medium" style="height: 41.7%;"></div>
+          <div class="vbar-num">5</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中 · 42%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="vbar-track"></div>
+          <div class="vbar-fill vbar-fill-high" style="height: 66.7%;"></div>
+          <div class="vbar-num">8</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高 · 67%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="vbar-track"></div>
+          <div class="vbar-fill vbar-fill-extreme" style="height: 100%;"></div>
+          <div class="vbar-num">12</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高 · 100%</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>"填充程度"隐喻直观，进度感强</li>
+          <li>不遮挡日期数字（数字居中）</li>
+          <li>高度变化提供额外的量感信息</li>
+          <li>左侧位置不与今日点冲突</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>5px 宽条在小屏幕仍可能被忽略</li>
+          <li>需要计算高度百分比（轻微逻辑开销）</li>
+          <li>底部数字可能与任务点视觉拥挤</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 C ===== -->
+  <section class="design-c">
+    <h2>方案 C · 信号强度条 <span style="font-size:14px;color:#6b7280;font-weight:500;">Signal Strength Bars</span></h2>
+    <p class="intro">
+      右上角 4 格信号条（仿手机信号），点亮格数 = 等级（1=低, 2=中, 3=高, 4=极高）。下方小数字补充精确值。最紧凑的方案。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="signal signal-low"><span></span><span></span><span></span><span></span></div>
+          <div class="signal-num">2</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低 · 1 格</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="signal signal-medium"><span></span><span></span><span></span><span></span></div>
+          <div class="signal-num">5</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中 · 2 格</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="signal signal-high"><span></span><span></span><span></span><span></span></div>
+          <div class="signal-num">8</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高 · 3 格</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="signal signal-extreme"><span></span><span></span><span></span><span></span></div>
+          <div class="signal-num">12</div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高 · 4 格</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>极紧凑（16×14px），不占视觉空间</li>
+          <li>跨文化通用隐喻（手机信号）</li>
+          <li>等级离散显示，无需精确读数</li>
+          <li>下方数字保留精确值</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>信息粒度粗（4 级，丢失精确数量感）</li>
+          <li>小尺寸下颜色辨识度有限</li>
+          <li>需要二级阅读（信号条 + 数字）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 D ===== -->
+  <section class="design-d">
+    <h2>方案 D · 圆环仪表盘 <span style="font-size:14px;color:#6b7280;font-weight:500;">Circular Ring Gauge</span></h2>
+    <p class="intro">
+      右上角 26px 圆环，弧长 = 任务数/满负载。中心显示数字。弧色按等级变化。最具"仪表"质感。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="ring">
+            <svg width="26" height="26" viewBox="0 0 26 26">
+              <circle cx="13" cy="13" r="10" fill="none" stroke="#f3f4f6" stroke-width="3" />
+              <circle cx="13" cy="13" r="10" fill="none" stroke="var(--load-low)" stroke-width="3" stroke-linecap="round" stroke-dasharray="10.47 62.83" />
+            </svg>
+            <div class="ring-num" style="color: var(--load-low);">2</div>
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低 · 17%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="ring">
+            <svg width="26" height="26" viewBox="0 0 26 26">
+              <circle cx="13" cy="13" r="10" fill="none" stroke="#f3f4f6" stroke-width="3" />
+              <circle cx="13" cy="13" r="10" fill="none" stroke="var(--load-medium)" stroke-width="3" stroke-linecap="round" stroke-dasharray="26.18 62.83" />
+            </svg>
+            <div class="ring-num" style="color: var(--load-medium);">5</div>
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中 · 42%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="ring">
+            <svg width="26" height="26" viewBox="0 0 26 26">
+              <circle cx="13" cy="13" r="10" fill="none" stroke="#f3f4f6" stroke-width="3" />
+              <circle cx="13" cy="13" r="10" fill="none" stroke="var(--load-high)" stroke-width="3" stroke-linecap="round" stroke-dasharray="41.89 62.83" />
+            </svg>
+            <div class="ring-num" style="color: var(--load-high);">8</div>
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高 · 67%</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="ring">
+            <svg width="26" height="26" viewBox="0 0 26 26">
+              <circle cx="13" cy="13" r="10" fill="none" stroke="#f3f4f6" stroke-width="3" />
+              <circle cx="13" cy="13" r="10" fill="none" stroke="var(--load-extreme)" stroke-width="3" stroke-linecap="round" stroke-dasharray="62.83 62.83" />
+            </svg>
+            <div class="ring-num" style="color: var(--load-extreme);">12</div>
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高 · 100%</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>视觉精致，"仪表盘"专业感强</li>
+          <li>弧长 + 数字双通道，信息完整</li>
+          <li>百分比直观（弧填充 = 容量占比）</li>
+          <li>与品牌色系良好融合</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>SVG 实现稍复杂（dasharray 计算）</li>
+          <li>26px 圆环占右上角较大空间</li>
+          <li>小屏渲染细节可能模糊</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 E ===== -->
+  <section class="design-e">
+    <h2>方案 E · 堆叠迷你方块 <span style="font-size:14px;color:#6b7280;font-weight:500;">Stacked Mini Blocks · 10 格进度</span></h2>
+    <p class="intro">
+      日期下方 10 格迷你方块条，每格代表 1.2 个任务（满负载 12 = 10 格全亮）。点亮格数 = 当前负载。下方数字补充。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="cal-cell-date">15</div>
+          <div class="blocks">
+            <div class="block" style="background: var(--load-low);"></div>
+            <div class="block" style="background: var(--load-low);"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+          </div>
+          <div class="block-count">2</div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低 · 2/10</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="cal-cell-date">15</div>
+          <div class="blocks">
+            <div class="block" style="background: var(--load-medium);"></div>
+            <div class="block" style="background: var(--load-medium);"></div>
+            <div class="block" style="background: var(--load-medium);"></div>
+            <div class="block" style="background: var(--load-medium);"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+          </div>
+          <div class="block-count">5</div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中 · 5/10</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="cal-cell-date">15</div>
+          <div class="blocks">
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block" style="background: var(--load-high);"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+          </div>
+          <div class="block-count">8</div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高 · 8/10</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="cal-cell-date">15</div>
+          <div class="blocks">
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+            <div class="block" style="background: var(--load-extreme);"></div>
+          </div>
+          <div class="block-count">12</div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高 · 10/10</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>"进度条"隐喻，量感最直观</li>
+          <li>颜色 + 填充格数双重编码</li>
+          <li>不占用右上角，与日期布局兼容</li>
+          <li>纯 CSS 实现，无 SVG 复杂度</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>10 格在小屏（72px 月格）可能过密</li>
+          <li>需要额外垂直空间（约 18px）</li>
+          <li>格数与任务数非线性映射（1.2:1）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 方案 F ===== -->
+  <section class="design-f">
+    <h2>方案 F · 仪表图标 + 等级标签 <span style="font-size:14px;color:#6b7280;font-weight:500;">Gauge Icon + Level Tag</span></h2>
+    <p class="intro">
+      右上角胶囊式标签：左侧仪表 SVG 图标 + 右侧数字。描边色和背景色按等级变化。最贴近"系统负载指示器"的工程化表达。
+    </p>
+    <div class="demo-row">
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell">
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>0</strong><br />无</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-low">
+          <div class="gauge gauge-low">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M12 14l4-4" />
+              <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+            </svg>
+            2
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>2</strong><br />低</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-medium">
+          <div class="gauge gauge-medium">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M12 14l4-4" />
+              <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+            </svg>
+            5
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>5</strong><br />中</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-high">
+          <div class="gauge gauge-high">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M12 14l4-4" />
+              <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+            </svg>
+            8
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>8</strong><br />高</div>
+      </div>
+      <div class="demo-cell-wrapper">
+        <div class="cal-cell tint-extreme">
+          <div class="gauge gauge-extreme">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M12 14l4-4" />
+              <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+            </svg>
+            12
+          </div>
+          <div class="cal-cell-date">15</div>
+        </div>
+        <div class="demo-label"><strong>12</strong><br />极高</div>
+      </div>
+    </div>
+    <div class="pros-cons">
+      <div class="pros">
+        <h4>✓ 优点</h4>
+        <ul>
+          <li>"仪表盘"图标语义明确（系统负载）</li>
+          <li>描边 + 背景双色编码，辨识度高</li>
+          <li>与项目已有 Iconify 风格一致</li>
+          <li>胶囊形态专业，适合工具型应用</li>
+        </ul>
+      </div>
+      <div class="cons">
+        <h4>✗ 缺点</h4>
+        <ul>
+          <li>图标 + 数字组合占宽较大</li>
+          <li>无法表达"百分比/进度"信息</li>
+          <li>描边色在低饱和屏可能偏淡</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 对比表 ===== -->
+  <section>
+    <h2>方案综合对比</h2>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>方案</th>
+          <th>信息密度</th>
+          <th>视觉权重</th>
+          <th>实现复杂度</th>
+          <th>小屏兼容</th>
+          <th>专业感</th>
+          <th>综合推荐</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>A</strong> 容量胶囊徽标</td>
+          <td><span class="score score-5">高</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-5">低</span></td>
+          <td><span class="score score-4">良</span></td>
+          <td><span class="score score-4">良</span></td>
+          <td><span class="star">★★★★</span>☆</td>
+        </tr>
+        <tr>
+          <td><strong>B</strong> 垂直填充条</td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-3">低</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-5">优</span></td>
+          <td><span class="score score-4">良</span></td>
+          <td><span class="star">★★★</span>☆☆</td>
+        </tr>
+        <tr>
+          <td><strong>C</strong> 信号强度条</td>
+          <td><span class="score score-3">低</span></td>
+          <td><span class="score score-3">低</span></td>
+          <td><span class="score score-5">低</span></td>
+          <td><span class="score score-5">优</span></td>
+          <td><span class="score score-3">中</span></td>
+          <td><span class="star">★★★</span>☆☆</td>
+        </tr>
+        <tr>
+          <td><strong>D</strong> 圆环仪表盘</td>
+          <td><span class="score score-5">高</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-3">高</span></td>
+          <td><span class="score score-3">中</span></td>
+          <td><span class="score score-5">优</span></td>
+          <td><span class="star">★★★★</span>☆</td>
+        </tr>
+        <tr>
+          <td><strong>E</strong> 堆叠迷你方块</td>
+          <td><span class="score score-5">高</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-3">中</span></td>
+          <td><span class="score score-4">良</span></td>
+          <td><span class="star">★★★★</span>☆</td>
+        </tr>
+        <tr>
+          <td><strong>F</strong> 仪表图标+标签</td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-4">中</span></td>
+          <td><span class="score score-4">良</span></td>
+          <td><span class="score score-5">优</span></td>
+          <td><span class="star">★★★★</span>☆</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ===== 推荐 ===== -->
+  <section class="recommendation">
+    <h2>推荐方案</h2>
+    <p style="color:#4b5563;margin-bottom:8px;">
+      综合信息密度、实现成本、与现有 UI 风格匹配度，推荐以下两个方案择一实施：
+    </p>
+    <div class="recommendation-grid">
+      <div class="rec-card">
+        <span class="rank">首选 · 信息优先</span>
+        <h3>方案 A · 容量胶囊徽标</h3>
+        <p style="font-size:13px;color:#4b5563;">
+          <strong>理由：</strong>任务数是用户最关心的信息（"今天有多少事"），胶囊直接显示数字 + 颜色等级，扫视即知。实现最简单（1 个 div + class 绑定），与现有 <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:11px;">NTag</code> 风格一致。适合需要快速浏览整月负载的场景。
+        </p>
+        <p style="font-size:12px;color:#6b7280;margin-top:8px;">
+          建议尺寸：<code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;">min-w-[22px] h-[20px] px-2 rounded-full text-[11px] font-bold</code>，与今日小蓝点错位（徽标右上、蓝点居中下）。
+        </p>
+      </div>
+      <div class="rec-card">
+        <span class="rank">备选 · 专业感优先</span>
+        <h3>方案 D · 圆环仪表盘</h3>
+        <p style="font-size:13px;color:#4b5563;">
+          <strong>理由：</strong>圆环 + 中心数字同时表达"百分比 + 精确数"，视觉最精致，与 SelfPilot 工具型定位契合。SVG <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:11px;">stroke-dasharray</code> 实现弧长动画，hover 时可加旋转过渡。适合强调"容量监控"的仪表盘式体验。
+        </p>
+        <p style="font-size:12px;color:#6b7280;margin-top:8px;">
+          建议尺寸：<code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;">26×26px</code>，stroke-width 3px，半径 10px，circumference ≈ 62.83。
+        </p>
+      </div>
+    </div>
+    <p style="font-size:12px;color:#9ca3af;margin-top:20px;">
+      💡 所有方案均保留背景 tint（<code style="background:#fff;padding:1px 4px;border-radius:3px;">bg-green-50/amber-50/red-50/purple-50</code>）作为辅助视觉通道，并与现有 <code style="background:#fff;padding:1px 4px;border-radius:3px;">getLoadOfDay()</code> tooltip 配合，hover 时显示"3 个任务（目标A×2, 目标B×1）"明细。选定方案后可在 CalendarView.vue 中替换 <code style="background:#fff;padding:1px 4px;border-radius:3px;">&lt;!-- P2-5：负载指示条 --&gt;</code> 块（约 L1021-1035）。
+    </p>
+  </section>
+</div>
+</body>
+</html>

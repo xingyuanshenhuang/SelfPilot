@@ -8,6 +8,8 @@ use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // 获取应用数据目录并创建
             let app_dir = app.path().app_data_dir()?;
@@ -62,6 +64,7 @@ pub fn run() {
             commands::task::update_task_plan_qty,
             commands::task::update_task,
             commands::task::delete_task,
+            commands::task::delete_tasks_batch,
             commands::task::list_today_tasks,
             commands::task::list_overdue_tasks,
             commands::task::list_tasks_by_goal,
@@ -76,14 +79,17 @@ pub fn run() {
             // 进度相关
             commands::progress::get_goal_progress,
             commands::progress::get_all_goals_progress,
+            commands::progress::get_goal_ancestors_progress,
             // 统计相关
             commands::stats::get_completion_trend,
             commands::stats::get_goal_completion_stats,
             commands::stats::get_heatmap,
             commands::stats::get_completion_predictions,
+            commands::stats::get_daily_load,
             // 鼓励语相关
             commands::encouragement::list_encouragements,
             commands::encouragement::add_encouragement,
+            commands::encouragement::update_encouragement,
             commands::encouragement::delete_encouragement,
             commands::encouragement::random_encouragement,
             commands::encouragement::random_encouragement_by_streak,
@@ -95,7 +101,10 @@ pub fn run() {
             commands::settings::set_setting,
             // 备份相关
             commands::backup::export_data,
+            commands::backup::export_data_to_file,
             commands::backup::import_data,
+            commands::backup::backup_database,
+            commands::backup::restore_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

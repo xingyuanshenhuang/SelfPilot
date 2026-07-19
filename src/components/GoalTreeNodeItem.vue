@@ -456,7 +456,11 @@ const isDraggingThisGoal = computed(
             <Icon icon="mdi:pencil-outline" />
           </NButton>
           <!-- 删除（级联删除所有后代） -->
-          <NPopconfirm @positive-click="api.handleDeleteGoal(node.goal)">
+          <NPopconfirm
+            positive-text="确定"
+            negative-text="取消"
+            @positive-click="api.handleDeleteGoal(node.goal)"
+          >
             <template #trigger>
               <NButton size="tiny" quaternary type="error">
                 <Icon icon="mdi:delete" />

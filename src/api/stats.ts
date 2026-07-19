@@ -4,6 +4,7 @@ import type {
   GoalCompletionStat,
   HeatmapCell,
   CompletionPrediction,
+  DailyLoad,
 } from "@/types";
 
 /** 获取近 N 天每日完成趋势 */
@@ -29,4 +30,12 @@ export async function getCompletionPredictions(): Promise<
   CompletionPrediction[]
 > {
   return invoke("get_completion_predictions");
+}
+
+/** 获取日期范围内每日负载（按目标分组）— P2-5 */
+export async function getDailyLoad(
+  startDate: string,
+  endDate: string,
+): Promise<DailyLoad[]> {
+  return invoke("get_daily_load", { startDate, endDate });
 }

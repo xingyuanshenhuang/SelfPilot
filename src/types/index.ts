@@ -230,7 +230,7 @@ export const STATUS_META: Record<
   skipped: {
     icon: "mdi:skip-next-circle-outline",
     label: "已跳过",
-    color: "#909399",
+    color: "#b0b3b8",
   },
 };
 
@@ -375,6 +375,26 @@ export interface HeatmapCell {
   completion_rate: number;
 }
 
+/** 单目标在某日的负载 — P2-5 */
+export interface GoalLoad {
+  goal_id: string;
+  goal_name: string;
+  task_count: number;
+  total_qty: number;
+}
+
+/** 每日负载（按目标分组）— P2-5 跨目标负载平衡 */
+export interface DailyLoad {
+  /** 日期 yyyy-MM-dd */
+  date: string;
+  /** 当日任务总数（不含跳过） */
+  total_tasks: number;
+  /** 当日任务总量（plan_qty 之和，不含跳过） */
+  total_qty: number;
+  /** 按目标分组的负载明细 */
+  by_goal: GoalLoad[];
+}
+
 /** 完成预测状态 */
 export type PredictionStatus =
   | "on_track" // 按期完成
@@ -423,4 +443,17 @@ export interface SetTaskDependencyInput {
   task_id: string;
   /** 前置任务 ID（task_id 依赖此任务） */
   depends_on_id: string;
+}
+
+/** 删除任务结果（P2-3：返回被删任务所属 goal_id，供前端局部更新进度） */
+export interface DeleteTaskResult {
+  task_id: string;
+  goal_id: string;
+}
+
+/** 批量删除任务结果（P2-3：返回受影响的 goal_id 列表，供前端局部更新进度） */
+export interface DeleteTasksBatchResult {
+  deleted_count: number;
+  /** 受影响的 goal_id 列表（去重） */
+  affected_goal_ids: string[];
 }
