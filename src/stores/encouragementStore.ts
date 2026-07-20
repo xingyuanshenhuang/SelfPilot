@@ -6,6 +6,9 @@ import type {
   StreakInfo,
   EncouragementLevel,
   EncouragementTriggerSource,
+  EncouragementSettings,
+  UpdateEncouragementSettingsInput,
+  UserFavorite,
 } from "@/types";
 
 /**
@@ -27,8 +30,18 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     current_streak: 0,
     longest_streak: 0,
     completed_today: false,
+    milestone: "none",
   });
   const loaded = ref(false);
+
+  // P1-4：鼓励语偏好设置
+  const settings = ref<EncouragementSettings>({
+    enabled: true,
+    frequency: "normal",
+    style: "warm",
+    celebration_animation: true,
+    emoji_enabled: true,
+  });
 
   const presetList = computed(() =>
     list.value.filter((e) => e.category === "preset"),
@@ -37,6 +50,14 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     list.value.filter((e) => e.category === "custom"),
   );
 
+  // P3-2：用户收藏列表
+  const favorites = ref<Set<string>>(new Set());
+
+  /** 判断是否已收藏 */
+  function isFavorite(id: string): boolean {
+    return favorites.value.has(id);
+  }
+
   /** 按等级分组 */
   const byLevel = computed(() => {
     const groups: Record<EncouragementLevel, Encouragement[]> = {
@@ -44,6 +65,7 @@ export const useEncouragementStore = defineStore("encouragement", () => {
       advanced: [],
       highlight: [],
       celebration: [],
+      setback: [],
     };
     for (const e of list.value) {
       if (groups[e.level]) {
@@ -63,6 +85,33 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     }
   }
 
+  // P3-2：加载收藏列表
+  async function fetchFavorites() {
+    try {
+      const list: UserFavorite[] = await encApi.listFavorites();
+      favorites.value = new Set(list.map((f) => f.encouragement_id));
+    } catch {
+      favorites.value = new Set();
+    }
+  }
+
+  // P3-2：添加收藏
+  async function addFavorite(id: string) {
+    await encApi.addFavorite(id);
+    favorites.value.add(id);
+  }
+
+  // P3-2：移除收藏
+  async function removeFavorite(id: string) {
+    await encApi.removeFavorite(id);
+    favorites.value.delete(id);
+  }
+
+  // P3-3：记录反馈
+  async function recordFeedback(id: string, type: "like" | "dislike") {
+    await encApi.recordFeedback(id, type);
+  }
+
   /** 加载连续天数 */
   async function fetchStreak() {
     try {
@@ -70,6 +119,22 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     } catch {
       // 忽略
     }
+  }
+
+  // P1-4：加载鼓励语偏好设置
+  async function fetchSettings() {
+    try {
+      settings.value = await encApi.getEncouragementSettings();
+    } catch {
+      // 保持默认值
+    }
+  }
+
+  // P1-4：更新鼓励语偏好设置
+  async function updateSettings(input: UpdateEncouragementSettingsInput) {
+    await encApi.updateEncouragementSettings(input);
+    // 更新本地状态
+    Object.assign(settings.value, input);
   }
 
   /** 添加自定义鼓励语 */
@@ -128,14 +193,16 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     return pickFallback();
   }
 
-  /** 根据连续天数智能抽取鼓励语（Sprint 5 个性化规则 + P0-4 去重） */
+  /** 根据连续天数智能抽取鼓励语（Sprint 5 个性化规则 + P0-4 去重 + P3-4 longest_streak） */
   async function randomByStreak(
     streakDays: number,
+    longestStreakDays: number,
     triggerSource: EncouragementTriggerSource = "complete_first",
   ): Promise<Encouragement | null> {
     try {
       const enc = await encApi.randomEncouragementByStreak(
         streakDays,
+        longestStreakDays,
         triggerSource,
       );
       if (enc) return enc;
@@ -163,16 +230,25 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     list,
     streak,
     loaded,
+    settings,
+    favorites,
     presetList,
     customList,
     byLevel,
     fetchAll,
     fetchStreak,
+    fetchSettings,
+    fetchFavorites,
+    addFavorite,
+    removeFavorite,
+    recordFeedback,
     add,
     update,
+    updateSettings,
     remove,
     random,
     randomByStreak,
     randomCelebration,
+    isFavorite,
   };
 });

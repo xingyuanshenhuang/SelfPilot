@@ -284,7 +284,8 @@ export type EncouragementLevel =
   | "normal" // 普通（1天）
   | "advanced" // 进阶（3天）
   | "highlight" // 高亮（7天）
-  | "celebration"; // 庆祝（全部完成）
+  | "celebration" // 庆祝（全部完成）
+  | "setback"; // 挫折安抚（P1-2：连续中断/进度滞后）
 
 /** 鼓励语 */
 export interface Encouragement {
@@ -295,6 +296,14 @@ export interface Encouragement {
   /** 鼓励语等级 */
   level: EncouragementLevel;
   created_at: string;
+  /** P2-1：情境标签（JSON 格式） */
+  context_tags?: string;
+  /** P2-5：隐藏标记（仅预设文案可隐藏） */
+  hidden?: number;
+  /** P3-1：权重（用于加权随机，默认1.0） */
+  weight?: number;
+  /** P3-5：排序（用于拖拽排序，默认0） */
+  sort_order?: number;
 }
 
 /** 添加鼓励语输入 */
@@ -302,6 +311,49 @@ export interface AddEncouragementInput {
   text: string;
   /** 可选等级，默认 "normal" */
   level?: EncouragementLevel;
+}
+
+/** 鼓励语展示触发源（P0-4：展示历史与去重） */
+export type EncouragementTriggerSource =
+  | "complete_first" // 完成今日首任务（modal）
+  | "complete_normal" // 完成非首任务（toast）
+  | "complete_celebration" // 全部目标完成（celebration modal）
+  | "dashboard_banner" // 进入仪表盘 banner
+  | "streak_break" // P1-2：连续中断
+  | "progress_lag" // P1-2：进度滞后
+  | "goal_created" // P2-2：新建目标
+  | "goal_midway" // P2-2：目标进度 50%
+  | "task_skipped" // P2-2：跳过任务
+  | "streak_recovery"; // P2-2：中断后恢复
+
+/** 更新鼓励语输入（P0-5：补齐编辑功能，仅自定义文案可修改） */
+export interface UpdateEncouragementInput {
+  id: string;
+  text?: string;
+  level?: EncouragementLevel;
+}
+
+/** 鼓励语偏好设置（P1-4：用户偏好设置） */
+export interface EncouragementSettings {
+  /** 总开关 */
+  enabled: boolean;
+  /** 展示频率 */
+  frequency: "aggressive" | "normal" | "sparse";
+  /** 文案风格 */
+  style: "warm" | "professional" | "minimal";
+  /** 庆祝动画开关 */
+  celebration_animation: boolean;
+  /** emoji 显示开关 */
+  emoji_enabled: boolean;
+}
+
+/** 更新鼓励语偏好设置输入（P1-4：所有字段可选） */
+export interface UpdateEncouragementSettingsInput {
+  enabled?: boolean;
+  frequency?: "aggressive" | "normal" | "sparse";
+  style?: "warm" | "professional" | "minimal";
+  celebration_animation?: boolean;
+  emoji_enabled?: boolean;
 }
 
 /** 设置项（key-value） */
@@ -324,6 +376,8 @@ export interface StreakInfo {
   longest_streak: number;
   /** 今日是否已完成至少一个任务 */
   completed_today: boolean;
+  /** P2-4：里程碑成就（none/expert/master） */
+  milestone: string;
 }
 
 /** 导出数据（完整备份） */
@@ -357,6 +411,44 @@ export interface ImportResult {
   tasks_skipped: number;
   encouragements_imported: number;
   settings_imported: number;
+}
+
+/** 滞后目标详情（P1-2：进度滞后检测） */
+export interface LaggingGoal {
+  id: string;
+  name: string;
+  deadline: string;
+  predicted_end_date: string;
+  /** 距截止日期剩余天数（负数=已逾期） */
+  days_remaining: number;
+}
+
+/** 挫折场景检测结果（P1-2：挫折/安抚场景） */
+export interface SetbackSituation {
+  /** 是否发生连续中断 */
+  has_streak_break: boolean;
+  /** 中断前的连续天数 */
+  streak_break_prev: number;
+  /** 是否存在进度滞后 */
+  has_progress_lag: boolean;
+  /** 滞后目标列表 */
+  lagging_goals: LaggingGoal[];
+}
+
+/** 庆祝成就数据（P1-3：celebration 仪式感增强） */
+export interface CelebrationAchievement {
+  /** 总目标数 */
+  total_goals: number;
+  /** 总任务数 */
+  total_tasks: number;
+  /** 已完成任务数 */
+  completed_tasks: number;
+  /** 本次冲刺耗时（天） */
+  days_elapsed: number;
+  /** 完成时的连续天数 */
+  final_streak: number;
+  /** 完成时最长连续天数 */
+  final_longest_streak: number;
 }
 
 /** 热力图单元格 */
@@ -456,4 +548,20 @@ export interface DeleteTasksBatchResult {
   deleted_count: number;
   /** 受影响的 goal_id 列表（去重） */
   affected_goal_ids: string[];
+}
+
+/** 用户收藏（P3-2） */
+export interface UserFavorite {
+  id: string;
+  encouragement_id: string;
+  created_at: string;
+}
+
+/** 鼓励语反馈（P3-3） */
+export interface EncouragementFeedback {
+  id: string;
+  encouragement_id: string;
+  /** like | dislike */
+  feedback_type: "like" | "dislike";
+  created_at: string;
 }

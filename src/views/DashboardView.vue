@@ -14,9 +14,11 @@ import { useTaskStore } from "@/stores/taskStore";
 import { useGoalStore } from "@/stores/goalStore";
 import { useEncouragementStore } from "@/stores/encouragementStore";
 import TaskItem from "@/components/TaskItem.vue";
-import type { TodayTask } from "@/types";
+import SetbackModal from "@/components/SetbackModal.vue";
+import type { TodayTask, SetbackSituation } from "@/types";
 import ProgressRing from "@/components/ProgressRing.vue";
 import { format } from "date-fns";
+import { getSetbackSituation } from "@/api/encouragement";
 
 const taskStore = useTaskStore();
 const goalStore = useGoalStore();
@@ -26,6 +28,10 @@ const message = useMessage();
 const today = computed(() => format(new Date(), "yyyy-MM-dd"));
 const encouragement = ref("");
 const selectedOverdueDate = ref<string | null>(null);
+
+// P1-2：挫折场景检测
+const setbackSituation = ref<SetbackSituation | null>(null);
+const showSetbackModal = ref(false);
 
 /** 只展示根目标（总目标），子目标的进度已汇总到父目标 */
 const rootGoals = computed(() =>
@@ -98,11 +104,29 @@ onMounted(async () => {
     taskStore.fetchAll(),
     goalStore.fetchGoals(),
     goalStore.fetchProgresses(),
+    encStore.fetchSettings(), // P1-4：确保 settings 已加载
   ]);
   // P0-1：banner 文案改用 encStore.random（统一文案源，含展示去重）
   const enc = await encStore.random("dashboard_banner");
   encouragement.value = enc?.text ?? "";
+
+  // P1-2：挫折场景检测（仅在鼓励语开关开启时）
+  if (encStore.settings.enabled) {
+    try {
+      const setback = await getSetbackSituation();
+      if (setback.has_streak_break || setback.has_progress_lag) {
+        setbackSituation.value = setback;
+        showSetbackModal.value = true;
+      }
+    } catch (e) {
+      console.warn("挫折场景检测失败:", e);
+    }
+  }
 });
+
+function handleSetbackClose() {
+  showSetbackModal.value = false;
+}
 
 async function refresh() {
   await Promise.all([taskStore.fetchAll(), goalStore.fetchProgresses()]);
@@ -273,5 +297,12 @@ async function refresh() {
       </div>
       <NEmpty v-else description="还没有目标，请到左侧「目标树」创建" />
     </NCard>
+
+    <!-- P1-2：挫折安抚弹窗 -->
+    <SetbackModal
+      v-model:show="showSetbackModal"
+      :setback="setbackSituation"
+      @close="handleSetbackClose"
+    />
   </div>
 </template>

@@ -19,11 +19,16 @@ import { Icon } from "@iconify/vue";
 import { h } from "vue";
 import { useSettingStore } from "@/stores/settingStore";
 import { useTaskStore } from "@/stores/taskStore";
+import { useEncouragementStore } from "@/stores/encouragementStore";
+import CelebrationModal from "@/components/CelebrationModal.vue";
+import { getCelebrationAchievement } from "@/api/stats";
+import type { CelebrationAchievement } from "@/types";
 
 const activeView = ref<string>("dashboard");
 
 const settingStore = useSettingStore();
 const taskStore = useTaskStore();
+const encStore = useEncouragementStore();
 
 const DashboardView = defineAsyncComponent(
   () => import("./views/DashboardView.vue"),
@@ -101,12 +106,33 @@ const currentView = computed(() => {
 
 // PRD §4.2 模块七 & Sprint 5：完成当日首个任务后弹出鼓励语弹窗
 // Sprint 5：支持等级触发（1/3/7天 + 全部完成庆祝）
+// P1-3：celebration 使用全屏庆祝弹窗
 const showEncouragementModal = ref(false);
+const showCelebrationModal = ref(false);
+const celebrationAchievement = ref<CelebrationAchievement | null>(null);
 
 watch(
   () => taskStore.pendingEncouragement,
-  (enc) => {
-    if (enc) {
+  async (enc) => {
+    if (!enc) return;
+
+    if (taskStore.isCelebration) {
+      // P1-3：全部目标完成，显示庆祝弹窗
+      if (encStore.settings.celebration_animation) {
+        try {
+          celebrationAchievement.value = await getCelebrationAchievement();
+          showCelebrationModal.value = true;
+        } catch (e) {
+          console.warn("获取庆祝数据失败:", e);
+          // 降级：使用普通弹窗
+          showEncouragementModal.value = true;
+        }
+      } else {
+        // 用户关闭了庆祝动画，使用普通弹窗
+        showEncouragementModal.value = true;
+      }
+    } else {
+      // 普通鼓励语弹窗
       showEncouragementModal.value = true;
     }
   },
@@ -114,6 +140,11 @@ watch(
 
 function closeEncouragementModal() {
   showEncouragementModal.value = false;
+  taskStore.clearPendingEncouragement();
+}
+
+function closeCelebrationModal() {
+  showCelebrationModal.value = false;
   taskStore.clearPendingEncouragement();
 }
 
@@ -219,6 +250,15 @@ const encouragementBodyColor = computed(() =>
             </NSpace>
           </template>
         </NModal>
+
+        <!-- P1-3：庆祝弹窗（全部目标完成） -->
+        <CelebrationModal
+          v-model:show="showCelebrationModal"
+          :achievement="celebrationAchievement"
+          :encouragement="taskStore.pendingEncouragement"
+          :animation-enabled="encStore.settings.celebration_animation"
+          @close="closeCelebrationModal"
+        />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>

@@ -5,6 +5,7 @@ import type {
   HeatmapCell,
   CompletionPrediction,
   DailyLoad,
+  CelebrationAchievement,
 } from "@/types";
 
 /** 获取近 N 天每日完成趋势 */
@@ -38,4 +39,9 @@ export async function getDailyLoad(
   endDate: string,
 ): Promise<DailyLoad[]> {
   return invoke("get_daily_load", { startDate, endDate });
+}
+
+/** 获取庆祝成就数据（P1-3） */
+export async function getCelebrationAchievement(): Promise<CelebrationAchievement> {
+  return invoke("get_celebration_achievement");
 }

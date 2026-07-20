@@ -11,6 +11,7 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NTag,
+  NSwitch,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -18,10 +19,12 @@ import { Icon } from "@iconify/vue";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useSettingStore } from "@/stores/settingStore";
+import { useEncouragementStore } from "@/stores/encouragementStore";
 import * as backupApi from "@/api/backup";
 import type { ImportConflictMode, ImportResult } from "@/types";
 
 const settingStore = useSettingStore();
+const encStore = useEncouragementStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -53,10 +56,25 @@ const conflictOptions = [
   { label: "重命名导入项（保留双方）", value: "rename" },
 ];
 
+// P1-4：鼓励语偏好设置选项
+const frequencyOptions = [
+  { label: "每次完成", value: "aggressive" },
+  { label: "首任务+里程碑", value: "normal" },
+  { label: "仅里程碑", value: "sparse" },
+];
+
+const styleOptions = [
+  { label: "温暖鼓励", value: "warm" },
+  { label: "专业理性", value: "professional" },
+  { label: "极简克制", value: "minimal" },
+];
+
 onMounted(async () => {
   if (!settingStore.loaded) {
     await settingStore.loadTheme();
   }
+  // P1-4：加载鼓励语偏好设置
+  await encStore.fetchSettings();
 });
 
 async function handleThemeChange(value: "light" | "dark") {
@@ -280,6 +298,105 @@ async function handleNativeRestore() {
             深色
           </NRadioButton>
         </NRadioGroup>
+      </NSpace>
+    </NCard>
+
+    <!-- P1-4：鼓励语偏好 -->
+    <NCard :bordered="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <Icon
+            icon="mdi:message-text-outline"
+            width="20"
+            class="text-orange-500"
+          />
+          <span>鼓励语偏好</span>
+        </div>
+      </template>
+      <NSpace vertical :size="16">
+        <!-- 总开关 -->
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-medium">显示鼓励语</div>
+            <div class="text-xs text-gray-500">完成任务时显示鼓励文案</div>
+          </div>
+          <NSwitch
+            v-model:value="encStore.settings.enabled"
+            @update:value="
+              encStore
+                .updateSettings({ enabled: $event })
+                .then(() => message.success('设置已保存'))
+            "
+          />
+        </div>
+
+        <!-- 展示频率 -->
+        <div>
+          <div class="text-sm font-medium mb-2">展示频率</div>
+          <NRadioGroup
+            v-model:value="encStore.settings.frequency"
+            @update:value="
+              encStore
+                .updateSettings({ frequency: $event })
+                .then(() => message.success('设置已保存'))
+            "
+          >
+            <NRadioButton
+              v-for="opt in frequencyOptions"
+              :key="opt.value"
+              :value="opt.value"
+            >
+              {{ opt.label }}
+            </NRadioButton>
+          </NRadioGroup>
+        </div>
+
+        <!-- 文案风格 -->
+        <div>
+          <div class="text-sm font-medium mb-2">文案风格</div>
+          <NSelect
+            v-model:value="encStore.settings.style"
+            :options="styleOptions"
+            style="width: 200px"
+            @update:value="
+              encStore
+                .updateSettings({ style: $event })
+                .then(() => message.success('设置已保存'))
+            "
+          />
+        </div>
+
+        <!-- 庆祝动画 -->
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-medium">庆祝动画</div>
+            <div class="text-xs text-gray-500">全部目标完成时显示庆祝效果</div>
+          </div>
+          <NSwitch
+            v-model:value="encStore.settings.celebration_animation"
+            @update:value="
+              encStore
+                .updateSettings({ celebration_animation: $event })
+                .then(() => message.success('设置已保存'))
+            "
+          />
+        </div>
+
+        <!-- emoji 显示 -->
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-medium">显示 emoji</div>
+            <div class="text-xs text-gray-500">鼓励语文案中显示表情符号</div>
+          </div>
+          <NSwitch
+            v-model:value="encStore.settings.emoji_enabled"
+            @update:value="
+              encStore
+                .updateSettings({ emoji_enabled: $event })
+                .then(() => message.success('设置已保存'))
+            "
+          />
+        </div>
       </NSpace>
     </NCard>
 

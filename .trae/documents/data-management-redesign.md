@@ -83,8 +83,8 @@
 
 ## 涉及文件
 
-| 文件 | 改动 |
-|------|------|
+| 文件                         | 改动                                          |
+| ---------------------------- | --------------------------------------------- |
 | `src/views/SettingsView.vue` | 重写「数据管理」区域为三个卡片 + 改进导入弹窗 |
 
 仅修改 1 个文件，所有逻辑和 UI 都在 SettingsView.vue 中。
@@ -94,10 +94,12 @@
 ### Step 1: 重写 SettingsView.vue 的数据管理区域
 
 **Script 部分新增**：
+
 - `importPreviewInfo` ref：存储解析后的 JSON 摘要信息
 - `parseExportSummary(jsonStr)` 函数：解析 JSON 并提取 version、exported_at、各数据数量
 
 **Template 部分重写**：
+
 - 删除原来的单个「数据管理」NCard
 - 替换为三个 NCard：一键备份、数据导入导出、备份方式对比
 - 对比表格使用原生 `<table>` + Tailwind 样式

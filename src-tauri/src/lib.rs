@@ -99,6 +99,32 @@ pub fn run() {
             commands::settings::get_all_settings,
             commands::settings::get_setting,
             commands::settings::set_setting,
+            // P1-4: 鼓励语偏好设置
+            commands::settings::get_encouragement_settings,
+            commands::settings::update_encouragement_settings,
+            // P1-2: 挫折场景检测
+            commands::encouragement::get_setback_situation,
+            // P1-3: 庆祝成就数据
+            commands::stats::get_celebration_achievement,
+            // P1-5: 批量操作
+            commands::encouragement::batch_delete_encouragements,
+            commands::encouragement::batch_update_encouragement_level,
+            // P2-5: 预设文案管理
+            commands::encouragement::hide_preset_encouragement,
+            commands::encouragement::reset_hidden_presets,
+            // P3-2: 用户收藏机制
+            commands::encouragement::add_favorite,
+            commands::encouragement::remove_favorite,
+            commands::encouragement::list_favorites,
+            // P3-3: 展示反馈学习
+            commands::encouragement::record_feedback,
+            commands::encouragement::get_feedback_stats,
+            // P3-5: 拖拽排序
+            commands::encouragement::update_encouragement_order,
+            commands::encouragement::batch_update_encouragement_order,
+            // P3-6: 独立导入导出
+            commands::encouragement::export_encouragements,
+            commands::encouragement::import_encouragements,
             // 备份相关
             commands::backup::export_data,
             commands::backup::export_data_to_file,

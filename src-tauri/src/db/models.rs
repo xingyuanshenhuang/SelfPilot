@@ -415,15 +415,24 @@ pub struct GoalCompletionStat {
 ///   - "advanced" 进阶（3天）
 ///   - "highlight" 高亮（7天）
 ///   - "celebration" 庆祝（全部完成）
+///   - "setback" 挫折安抚（P1-2）
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Encouragement {
     pub id: String,
     pub text: String,
     /// preset | custom
     pub category: String,
-    /// normal | advanced | highlight | celebration
+    /// normal | advanced | highlight | celebration | setback
     pub level: String,
     pub created_at: String,
+    /// P2-1：情境标签（JSON 格式）
+    pub context_tags: Option<String>,
+    /// P2-5：隐藏标记（仅预设文案可隐藏）
+    pub hidden: Option<i32>,
+    /// P3-1：权重（用于加权随机，默认1.0）
+    pub weight: Option<f64>,
+    /// P3-5：排序（用于拖拽排序，默认0）
+    pub sort_order: Option<i32>,
 }
 
 /// 添加鼓励语输入
@@ -443,11 +452,37 @@ pub struct UpdateEncouragementInput {
     pub id: String,
     /// 可选新文本，传入时需满足 2~100 字符
     pub text: Option<String>,
-    /// 可选新等级：normal | advanced | highlight | celebration
+    /// 可选新等级：normal | advanced | highlight | celebration | setback
     pub level: Option<String>,
 }
 
-/// 设置项（key-value）
+/// 更新鼓励语情境标签输入（P2-1）
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEncouragementContextInput {
+    pub id: String,
+    /// 情境标签 JSON 字符串
+    pub context_tags: String,
+}
+
+/// 用户收藏（P3-2）
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct UserFavorite {
+    pub id: String,
+    pub encouragement_id: String,
+    pub created_at: String,
+}
+
+/// 鼓励语反馈（P3-3）
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct EncouragementFeedback {
+    pub id: String,
+    pub encouragement_id: String,
+    /// like | dislike
+    pub feedback_type: String,
+    pub created_at: String,
+}
+
+/** 设置项（key-value） */
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Setting {
     pub key: String,
@@ -461,6 +496,36 @@ pub struct SetSettingInput {
     pub value: String,
 }
 
+/// 鼓励语偏好设置（P1-4：用户偏好设置）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncouragementSettings {
+    /// 总开关
+    pub enabled: bool,
+    /// 展示频率：aggressive（每次完成）/ normal（首任务+里程碑）/ sparse（仅里程碑）
+    pub frequency: String,
+    /// 文案风格：warm（温暖鼓励）/ professional（专业理性）/ minimal（极简克制）
+    pub style: String,
+    /// 庆祝动画开关（全部目标完成时显示 celebration 动画）
+    pub celebration_animation: bool,
+    /// emoji 显示开关（文案中是否显示 emoji）
+    pub emoji_enabled: bool,
+}
+
+/// 更新鼓励语偏好设置输入（P1-4：所有字段可选）
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEncouragementSettingsInput {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub frequency: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+    #[serde(default)]
+    pub celebration_animation: Option<bool>,
+    #[serde(default)]
+    pub emoji_enabled: Option<bool>,
+}
+
 /// 连续完成天数统计
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreakInfo {
@@ -470,6 +535,49 @@ pub struct StreakInfo {
     pub longest_streak: i64,
     /// 今日是否已完成至少一个任务
     pub completed_today: bool,
+    /// P2-4：里程碑成就（none/expert/master）
+    pub milestone: String,
+}
+
+/// 滞后目标详情（P1-2：进度滞后检测）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaggingGoal {
+    pub id: String,
+    pub name: String,
+    pub deadline: String,
+    pub predicted_end_date: String,
+    /// 距截止日期剩余天数（负数=已逾期）
+    pub days_remaining: i32,
+}
+
+/// 挫折场景检测结果（P1-2：挫折/安抚场景）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetbackSituation {
+    /// 是否发生连续中断
+    pub has_streak_break: bool,
+    /// 中断前的连续天数（仅 has_streak_break=true 时有效）
+    pub streak_break_prev: i32,
+    /// 是否存在进度滞后
+    pub has_progress_lag: bool,
+    /// 滞后目标列表
+    pub lagging_goals: Vec<LaggingGoal>,
+}
+
+/// 庆祝成就数据（P1-3：celebration 仪式感增强）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CelebrationAchievement {
+    /// 总目标数
+    pub total_goals: i32,
+    /// 总任务数
+    pub total_tasks: i32,
+    /// 已完成任务数
+    pub completed_tasks: i32,
+    /// 本次冲刺耗时（天，从首个任务创建到全部完成）
+    pub days_elapsed: i32,
+    /// 完成时的连续天数
+    pub final_streak: i32,
+    /// 完成时最长连续天数
+    pub final_longest_streak: i32,
 }
 
 /// 导出数据（完整备份）

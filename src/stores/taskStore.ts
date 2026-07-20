@@ -61,10 +61,11 @@ export const useTaskStore = defineStore("task", () => {
             isCelebration.value = true;
           }
         } else {
-          // 根据连续天数选择等级鼓励语
+          // 根据连续天数选择等级鼓励语（P3-4：传入 longest_streak）
           const streakInfo = await encApi.getStreak();
           const enc = await encApi.randomEncouragementByStreak(
             streakInfo.current_streak,
+            streakInfo.longest_streak,
             "complete_first",
           );
           if (enc) {

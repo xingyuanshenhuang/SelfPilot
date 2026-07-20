@@ -23,6 +23,8 @@ import {
   NProgress,
   NSelect,
   NSwitch,
+  NInput,
+  NInputNumber,
   useMessage,
   useDialog,
 } from "naive-ui";
@@ -48,7 +50,12 @@ import { zhCN } from "date-fns/locale";
 import * as taskApi from "@/api/task";
 import * as statsApi from "@/api/stats";
 import { useGoalStore } from "@/stores/goalStore";
-import type { CalendarTask, TaskStatus, DailyLoad } from "@/types";
+import type {
+  CalendarTask,
+  TaskStatus,
+  DailyLoad,
+  CreateTaskInput,
+} from "@/types";
 import { STATUS_META } from "@/types";
 
 type ViewMode = "month" | "week" | "day";
@@ -169,6 +176,161 @@ const statusOptions: { label: string; value: TaskStatus }[] = [
   { label: "已完成", value: "done" },
   { label: "已跳过", value: "skipped" },
 ];
+
+// ===== P2-4：快速创建任务 =====
+
+/** 快速创建任务选项（日视图底部 / 月视图弹窗共用） */
+interface QuickTaskOptions {
+  name?: string;
+  goalId?: string | null;
+  planDate?: Date;
+  planQty?: number | null;
+  onSuccess?: () => void;
+}
+
+/** 日视图快速添加状态 */
+const quickTaskName = ref("");
+const quickTaskGoalId = ref<string | null>(null);
+const quickTaskPlanQty = ref<number | null>(null);
+const quickTaskCreating = ref(false);
+
+/** 月视图双击创建弹窗状态 */
+const showCreateDialog = ref(false);
+const createDialogDate = ref<Date>(new Date());
+const createDialogTaskName = ref("");
+const createDialogGoalId = ref<string | null>(null);
+const createDialogPlanQty = ref<number | null>(null);
+const createDialogCreating = ref(false);
+
+/** 弹窗触发元素引用（用于关闭后恢复焦点） */
+const createDialogTriggerRef = ref<HTMLElement | null>(null);
+
+/** 清空日视图快速添加输入 */
+function clearQuickTaskInput() {
+  quickTaskName.value = "";
+  quickTaskGoalId.value = null;
+  quickTaskPlanQty.value = null;
+}
+
+/** 清空月视图创建弹窗输入 */
+function clearCreateDialogInput() {
+  createDialogTaskName.value = "";
+  createDialogGoalId.value = null;
+  createDialogPlanQty.value = null;
+}
+
+/** 快速创建任务（日视图底部 / 月视图弹窗共用）
+ * @param options 可选参数，不传则使用日视图快速添加的状态
+ */
+async function createQuickTask(options?: QuickTaskOptions) {
+  const taskName = options?.name ?? quickTaskName.value;
+  const goalId = options?.goalId ?? quickTaskGoalId.value;
+  const planDate = options?.planDate ?? selectedDate.value;
+  const planQty = options?.planQty ?? quickTaskPlanQty.value;
+
+  // 输入验证
+  if (!taskName.trim()) {
+    message.warning("请输入任务名称");
+    return;
+  }
+  if (!goalId) {
+    message.warning("请选择目标");
+    return;
+  }
+
+  // 边界情况：检查目标是否存在
+  if (goalOptions.value.length === 0) {
+    message.warning("当前没有可用目标，请先创建目标");
+    return;
+  }
+
+  const creating = options ? createDialogCreating : quickTaskCreating;
+  creating.value = true;
+
+  try {
+    const input: CreateTaskInput = {
+      goal_id: goalId,
+      name: taskName.trim(),
+      plan_date: format(planDate, "yyyy-MM-dd"),
+      plan_qty: planQty ?? 1,
+    };
+
+    const created = await taskApi.createTask(input);
+    message.success(`任务「${created.name}」已创建`);
+
+    // P2-4 性能优化：局部更新而非全量刷新
+    // 将新任务添加到当前数据集，避免重新查询数据库
+    const newTask: CalendarTask = {
+      ...created,
+      goal_name:
+        goalStore.goals.find((g) => g.id === created.goal_id)?.name || "",
+      is_overdue: false,
+      is_blocked: false,
+      blocked_by_names: null,
+    };
+    tasks.value = [...tasks.value, newTask];
+
+    // 局部刷新受影响目标的进度
+    await goalStore.refreshProgressForGoalChain(created.goal_id);
+
+    // 清空输入
+    if (!options) {
+      clearQuickTaskInput();
+      // 创建成功后聚焦回任务名输入框，便于连续创建
+      nextTick(() => {
+        document.getElementById("quick-task-name")?.focus();
+      });
+    } else {
+      clearCreateDialogInput();
+    }
+
+    options?.onSuccess?.();
+  } catch (err) {
+    console.error("创建任务失败:", err);
+    // 区分错误类型，提供更精准的提示
+    const errorMsg = String(err);
+    if (errorMsg.includes("goal_id") || errorMsg.includes("不存在")) {
+      message.error("目标不存在或已被删除，请刷新页面");
+    } else if (errorMsg.includes("network") || errorMsg.includes("网络")) {
+      message.error("网络连接失败，请检查网络后重试");
+    } else {
+      message.error("创建任务失败，请重试");
+    }
+  } finally {
+    creating.value = false;
+  }
+}
+
+/** 月视图双击空白格打开创建弹窗
+ * @param day 选中日期
+ * @param triggerElement 触发元素（用于关闭后恢复焦点）
+ */
+function openCreateDialog(day: Date, triggerElement?: HTMLElement | null) {
+  createDialogDate.value = day;
+  clearCreateDialogInput();
+  showCreateDialog.value = true;
+  createDialogTriggerRef.value = triggerElement || null;
+
+  // P2-4 可访问性：弹窗打开后自动聚焦到第一个输入框
+  nextTick(() => {
+    document.getElementById("dialog-task-name")?.focus();
+  });
+}
+
+/** 提交月视图创建弹窗 */
+async function submitCreateDialog() {
+  await createQuickTask({
+    name: createDialogTaskName.value,
+    goalId: createDialogGoalId.value,
+    planDate: createDialogDate.value,
+    planQty: createDialogPlanQty.value,
+    onSuccess: () => {
+      showCreateDialog.value = false;
+      // 关闭弹窗后恢复焦点到触发元素
+      createDialogTriggerRef.value?.focus();
+    },
+  });
+}
 
 const weekDays = ["一", "二", "三", "四", "五", "六", "日"];
 
@@ -1137,6 +1299,12 @@ function getTaskAriaLabel(t: CalendarTask): string {
                     getLoadLevel(day) === 'extreme',
                 }"
                 @click="selectDay(day)"
+                @dblclick.stop="
+                  openCreateDialog(
+                    day,
+                    $event.currentTarget as HTMLElement | null,
+                  )
+                "
                 @keydown="onMonthCellKeydown($event)"
               >
                 <div
@@ -1664,6 +1832,87 @@ function getTaskAriaLabel(t: CalendarTask): string {
           </div>
           <NEmpty v-else description="当日无任务" />
         </NSpin>
+
+        <!-- P2-4：日视图底部快速添加栏 -->
+        <template #footer>
+          <div
+            class="flex flex-wrap items-end gap-2 pt-3 border-t border-gray-100"
+          >
+            <!-- P2-4 边界情况：无目标时显示提示 -->
+            <div
+              v-if="goalOptions.length === 0"
+              class="w-full text-center py-3 text-sm text-gray-400"
+            >
+              <Icon icon="mdi:information-outline" width="16" class="mr-1" />
+              当前没有可用目标，请先创建目标
+            </div>
+
+            <div v-else class="flex flex-wrap items-end gap-2 w-full">
+              <div class="flex-1 min-w-[160px]">
+                <label
+                  for="quick-task-name"
+                  class="block text-xs text-gray-500 mb-1"
+                >
+                  任务名称
+                </label>
+                <NInput
+                  id="quick-task-name"
+                  v-model:value="quickTaskName"
+                  placeholder="输入任务名，回车创建"
+                  size="small"
+                  :disabled="quickTaskCreating"
+                  @keydown.enter="createQuickTask()"
+                />
+              </div>
+              <div class="w-[140px]">
+                <label
+                  for="quick-task-goal"
+                  class="block text-xs text-gray-500 mb-1"
+                >
+                  选择目标
+                </label>
+                <NSelect
+                  id="quick-task-goal"
+                  v-model:value="quickTaskGoalId"
+                  :options="goalOptions"
+                  placeholder="目标"
+                  size="small"
+                  :disabled="quickTaskCreating"
+                  :max-tag-count="1"
+                />
+              </div>
+              <div class="w-[100px]">
+                <label
+                  for="quick-task-qty"
+                  class="block text-xs text-gray-500 mb-1"
+                >
+                  数量（可选）
+                </label>
+                <NInputNumber
+                  id="quick-task-qty"
+                  v-model:value="quickTaskPlanQty"
+                  placeholder="1"
+                  size="small"
+                  :min="1"
+                  :disabled="quickTaskCreating"
+                />
+              </div>
+              <NButton
+                type="primary"
+                size="small"
+                :disabled="!quickTaskName.trim() || !quickTaskGoalId"
+                :loading="quickTaskCreating"
+                aria-label="创建任务"
+                @click="createQuickTask()"
+              >
+                <template #icon>
+                  <Icon icon="mdi:plus" width="16" />
+                </template>
+                添加
+              </NButton>
+            </div>
+          </div>
+        </template>
       </NCard>
     </div>
 
@@ -1718,10 +1967,164 @@ function getTaskAriaLabel(t: CalendarTask): string {
         </div>
       </div>
     </NPopover>
+
+    <!-- P2-4：月视图双击创建任务弹窗（带过渡动画） -->
+    <Transition name="dialog-fade">
+      <div
+        v-if="showCreateDialog"
+        class="fixed inset-0 z-[2000] flex items-center justify-center bg-black/30 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-dialog-title"
+        aria-describedby="create-dialog-desc"
+        @click.self="showCreateDialog = false"
+        @keydown.esc.prevent="showCreateDialog = false"
+      >
+        <NCard
+          style="width: 400px; max-width: 90vw"
+          :bordered="false"
+          size="small"
+          role="document"
+        >
+          <template #header>
+            <div id="create-dialog-title" class="flex items-center gap-2">
+              <Icon
+                icon="mdi:plus-circle-outline"
+                width="20"
+                class="text-brand-500"
+                aria-hidden="true"
+              />
+              <span>创建任务</span>
+              <NTag size="small" type="info" :bordered="false">
+                {{
+                  format(createDialogDate, "yyyy-MM-dd EEEE", { locale: zhCN })
+                }}
+              </NTag>
+            </div>
+          </template>
+
+          <!-- P2-4 可访问性：添加对话框描述 -->
+          <p id="create-dialog-desc" class="sr-only">
+            为 {{ format(createDialogDate, "yyyy年M月d日") }} 创建新任务
+          </p>
+
+          <!-- P2-4 边界情况：无目标时显示提示 -->
+          <div
+            v-if="goalOptions.length === 0"
+            class="text-center py-6 text-sm text-gray-400"
+          >
+            <Icon
+              icon="mdi:information-outline"
+              width="24"
+              class="mb-2 opacity-50"
+            />
+            <div>当前没有可用目标</div>
+            <div class="text-xs mt-1">请先创建目标后再添加任务</div>
+            <NButton
+              size="small"
+              class="mt-3"
+              @click="showCreateDialog = false"
+            >
+              关闭
+            </NButton>
+          </div>
+
+          <div v-else class="space-y-3">
+            <div>
+              <label
+                for="dialog-task-name"
+                class="block text-xs text-gray-500 mb-1"
+              >
+                任务名称 <span class="text-red-500">*</span>
+              </label>
+              <NInput
+                id="dialog-task-name"
+                v-model:value="createDialogTaskName"
+                placeholder="输入任务名称"
+                :disabled="createDialogCreating"
+                @keydown.enter="submitCreateDialog()"
+              />
+            </div>
+
+            <div>
+              <label
+                for="dialog-task-goal"
+                class="block text-xs text-gray-500 mb-1"
+              >
+                选择目标 <span class="text-red-500">*</span>
+              </label>
+              <NSelect
+                id="dialog-task-goal"
+                v-model:value="createDialogGoalId"
+                :options="goalOptions"
+                placeholder="选择一个目标"
+                :disabled="createDialogCreating"
+                :max-tag-count="1"
+              />
+            </div>
+
+            <div>
+              <label
+                for="dialog-task-qty"
+                class="block text-xs text-gray-500 mb-1"
+              >
+                计划数量（可选，默认 1）
+              </label>
+              <NInputNumber
+                id="dialog-task-qty"
+                v-model:value="createDialogPlanQty"
+                placeholder="1"
+                :min="1"
+                :disabled="createDialogCreating"
+                style="width: 100%"
+              />
+            </div>
+          </div>
+
+          <template #action>
+            <NSpace justify="end">
+              <NButton
+                size="small"
+                :disabled="createDialogCreating"
+                @click="showCreateDialog = false"
+              >
+                取消
+              </NButton>
+              <NButton
+                type="primary"
+                size="small"
+                :disabled="
+                  !createDialogTaskName.trim() ||
+                  !createDialogGoalId ||
+                  goalOptions.length === 0
+                "
+                :loading="createDialogCreating"
+                @click="submitCreateDialog()"
+              >
+                创建
+              </NButton>
+            </NSpace>
+          </template>
+        </NCard>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
+/* P2-4：屏幕阅读器专用样式（视觉隐藏但可被屏幕阅读器访问） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 .calendar-cell:hover {
   transform: translateY(-1px);
 }
@@ -1887,5 +2290,26 @@ function getTaskAriaLabel(t: CalendarTask): string {
     width: 40px;
     flex-shrink: 0;
   }
+}
+
+/* ===== P2-4：创建任务弹窗过渡动画 ===== */
+.dialog-fade-enter-active,
+.dialog-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.dialog-fade-enter-active .n-card,
+.dialog-fade-leave-active .n-card {
+  transition:
+    transform 0.25s ease,
+    opacity 0.25s ease;
+}
+.dialog-fade-enter-from,
+.dialog-fade-leave-to {
+  opacity: 0;
+}
+.dialog-fade-enter-from .n-card,
+.dialog-fade-leave-to .n-card {
+  transform: scale(0.95) translateY(-10px);
+  opacity: 0;
 }
 </style>

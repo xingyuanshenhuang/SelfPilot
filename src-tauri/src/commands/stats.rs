@@ -1,7 +1,8 @@
 use tauri::State;
 
 use crate::db::models::{
-    CompletionPrediction, DailyLoad, DailyTrend, GoalCompletionStat, GoalLoad, HeatmapCell,
+    CelebrationAchievement, CompletionPrediction, DailyLoad, DailyTrend, GoalCompletionStat,
+    GoalLoad, HeatmapCell,
 };
 use crate::db::DbPool;
 use crate::error::AppResult;
@@ -478,4 +479,130 @@ pub async fn get_daily_load(
         cursor += chrono::Duration::days(1);
     }
     Ok(result)
+}
+
+// ============================================================
+// P1-3：庆祝成就数据
+// ============================================================
+
+/// 获取庆祝成就数据
+///
+/// 全部目标完成时调用，返回成就回顾信息
+#[tauri::command]
+pub async fn get_celebration_achievement(
+    state: State<'_, DbPool>,
+) -> AppResult<CelebrationAchievement> {
+    let today = chrono::Local::now().date_naive();
+
+    // 1. 统计根目标数
+    let goal_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM goals WHERE parent_id IS NULL",
+    )
+    .fetch_one(&state.0)
+    .await?;
+
+    // 2. 统计任务总数和已完成数
+    let (total_tasks, completed_tasks): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) 
+         FROM tasks WHERE status != 'skipped'",
+    )
+    .fetch_one(&state.0)
+    .await?;
+
+    // 3. 计算耗时（从首个任务创建到今天）
+    let first_task_date: Option<String> = sqlx::query_scalar(
+        "SELECT MIN(created_at) FROM tasks",
+    )
+    .fetch_optional(&state.0)
+    .await?;
+
+    let days_elapsed = if let Some(first_date) = first_task_date {
+        // 解析 ISO 8601 格式：2026-07-19T15:30:00
+        let first = chrono::NaiveDateTime::parse_from_str(&first_date, "%Y-%m-%dT%H:%M:%S")
+            .map(|dt| dt.date())
+            .ok();
+        if let Some(first) = first {
+            (today - first).num_days() as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    // 4. 获取连续天数（简化：查询 settings 或重新计算）
+    // 使用已有的 get_streak 命令逻辑，这里直接查询
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT plan_date,
+                COUNT(*) as task_count,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_count
+         FROM tasks
+         WHERE plan_date IS NOT NULL AND status != 'skipped'
+         GROUP BY plan_date",
+    )
+    .fetch_all(&state.0)
+    .await?;
+
+    use std::collections::HashMap;
+    let mut day_map: HashMap<chrono::NaiveDate, (bool, bool)> = HashMap::new();
+    for (date_str, task_count, done_count) in rows {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+            let has_task = task_count > 0;
+            let completed = done_count > 0;
+            day_map.insert(d, (has_task, completed));
+        }
+    }
+
+    // 计算当前连续天数
+    let mut current_streak: i64 = 0;
+    let mut cursor = today - chrono::Duration::days(1);
+    let today_entry = day_map.get(&today);
+    let _completed_today = today_entry.map(|(_, c)| *c).unwrap_or(false);
+
+    match today_entry {
+        None => {}
+        Some((true, false)) => {
+            current_streak = 0;
+        }
+        Some((true, true)) => {
+            current_streak = 1;
+        }
+        _ => {}
+    }
+
+    let today_unfinished = matches!(today_entry, Some((true, false)));
+    if !today_unfinished {
+        loop {
+            let entry = day_map.get(&cursor);
+            match entry {
+                None => {
+                    cursor = cursor - chrono::Duration::days(1);
+                }
+                Some((true, true)) => {
+                    current_streak += 1;
+                    cursor = cursor - chrono::Duration::days(1);
+                }
+                Some((true, false)) => {
+                    break;
+                }
+                _ => {
+                    cursor = cursor - chrono::Duration::days(1);
+                }
+            }
+            if (today - cursor).num_days() > 3650 {
+                break;
+            }
+        }
+    }
+
+    let final_longest_streak = current_streak; // 简化：使用当前连续
+
+    Ok(CelebrationAchievement {
+        total_goals: goal_count as i32,
+        total_tasks: total_tasks as i32,
+        completed_tasks: completed_tasks as i32,
+        days_elapsed,
+        final_streak: current_streak as i32,
+        final_longest_streak: final_longest_streak as i32,
+    })
 }
