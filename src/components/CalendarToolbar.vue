@@ -106,7 +106,7 @@ function handleToggleFilter() {
     nextTick(() => {
       filterContentRef.value
         ?.querySelector<HTMLElement>(
-          "input, button, [role='button'], [role='combobox'], [tabindex='0']"
+          "input, button, [role='button'], [role='combobox'], [tabindex='0']",
         )
         ?.focus();
     });
@@ -213,7 +213,11 @@ defineExpose({
       </div>
 
       <div v-if="periodStats.skipped > 0" class="flex items-center gap-1.5">
-        <Icon icon="mdi:skip-next-circle-outline" class="text-gray-400" width="16" />
+        <Icon
+          icon="mdi:skip-next-circle-outline"
+          class="text-gray-400"
+          width="16"
+        />
         <span class="text-sm font-semibold text-gray-400">
           {{ periodStats.skipped }}
         </span>
@@ -240,7 +244,12 @@ defineExpose({
           :class="{ 'rotate-90': !filterCollapsed }"
           aria-hidden="true"
         />
-        <Icon icon="mdi:filter-variant" class="text-gray-400" width="16" aria-hidden="true" />
+        <Icon
+          icon="mdi:filter-variant"
+          class="text-gray-400"
+          width="16"
+          aria-hidden="true"
+        />
         <span class="text-sm font-medium text-gray-700">筛选</span>
 
         <!-- 激活条件数徽标 -->
@@ -274,7 +283,9 @@ defineExpose({
         role="region"
         aria-label="筛选选项"
       >
-        <div class="flex items-center gap-3 flex-wrap pt-3 mt-1 border-t border-gray-100">
+        <div
+          class="flex items-center gap-3 flex-wrap pt-3 mt-1 border-t border-gray-100"
+        >
           <div class="filter-field">
             <label class="filter-label" for="filter-goal-select">目标</label>
             <NSelect
@@ -306,7 +317,9 @@ defineExpose({
           </div>
 
           <div class="filter-field">
-            <label class="filter-label" for="filter-overdue-switch">仅逾期</label>
+            <label class="filter-label" for="filter-overdue-switch"
+              >仅逾期</label
+            >
             <NSwitch
               v-model:value="filterOverdueOnly"
               size="small"
@@ -314,7 +327,12 @@ defineExpose({
             />
           </div>
 
-          <NButton v-if="filterHasCondition" size="small" quaternary @click="handleResetFilter">
+          <NButton
+            v-if="filterHasCondition"
+            size="small"
+            quaternary
+            @click="handleResetFilter"
+          >
             <template #icon>
               <Icon icon="mdi:close" />
             </template>
@@ -401,7 +419,9 @@ defineExpose({
 /* 过渡动画 */
 .filter-expand-enter-active,
 .filter-expand-leave-active {
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
   max-height: 300px;
   overflow: hidden;
 }

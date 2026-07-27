@@ -422,17 +422,15 @@ pub struct Encouragement {
     pub text: String,
     /// preset | custom
     pub category: String,
-    /// normal | advanced | highlight | celebration | setback
+    /// normal | advanced | highlight | celebration | setback | longest_streak
     pub level: String,
     pub created_at: String,
     /// P2-1：情境标签（JSON 格式）
     pub context_tags: Option<String>,
     /// P2-5：隐藏标记（仅预设文案可隐藏）
     pub hidden: Option<i32>,
-    /// P3-1：权重（用于加权随机，默认1.0）
-    pub weight: Option<f64>,
-    /// P3-5：排序（用于拖拽排序，默认0）
-    pub sort_order: Option<i32>,
+    /// P3-5：自定义排序顺序
+    pub sort_order: Option<i64>,
 }
 
 /// 添加鼓励语输入
@@ -441,6 +439,27 @@ pub struct AddEncouragementInput {
     pub text: String,
     /// 可选等级，默认 "normal"
     pub level: Option<String>,
+}
+
+/// P3-2：鼓励语收藏
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct EncouragementFavorite {
+    pub id: String,
+    pub encouragement_id: String,
+    pub favorited_at: String,
+}
+
+/// P3-3：鼓励语展示日志（含用户行为）
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct EncouragementShowLog {
+    pub id: String,
+    pub encouragement_id: String,
+    pub shown_at: String,
+    pub trigger_source: String,
+    /// 关闭时间（可选）
+    pub closed_at: Option<String>,
+    /// 观看时长（秒）
+    pub view_duration: Option<i64>,
 }
 
 /// 更新鼓励语输入（P0-5：补齐编辑功能）
@@ -464,24 +483,6 @@ pub struct UpdateEncouragementContextInput {
     pub context_tags: String,
 }
 
-/// 用户收藏（P3-2）
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct UserFavorite {
-    pub id: String,
-    pub encouragement_id: String,
-    pub created_at: String,
-}
-
-/// 鼓励语反馈（P3-3）
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct EncouragementFeedback {
-    pub id: String,
-    pub encouragement_id: String,
-    /// like | dislike
-    pub feedback_type: String,
-    pub created_at: String,
-}
-
 /** 设置项（key-value） */
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Setting {
@@ -494,6 +495,49 @@ pub struct Setting {
 pub struct SetSettingInput {
     pub key: String,
     pub value: String,
+}
+
+/// 鼓励语展示触发源（P0-4：展示历史与去重）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EncouragementTriggerSource {
+    /// 完成今日首任务（modal）
+    CompleteFirst,
+    /// 完成非首任务（toast）
+    CompleteNormal,
+    /// 全部目标完成（celebration modal）
+    CompleteCelebration,
+    /// 进入仪表盘 banner
+    DashboardBanner,
+    /// P1-2：连续中断
+    StreakBreak,
+    /// P1-2：进度滞后
+    ProgressLag,
+    /// P2-2：新建目标
+    GoalCreated,
+    /// P2-2：目标进度 50%
+    GoalMidway,
+    /// P2-2：跳过任务
+    TaskSkipped,
+    /// P2-2：中断后恢复
+    StreakRecovery,
+}
+
+impl AsRef<str> for EncouragementTriggerSource {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::CompleteFirst => "complete_first",
+            Self::CompleteNormal => "complete_normal",
+            Self::CompleteCelebration => "complete_celebration",
+            Self::DashboardBanner => "dashboard_banner",
+            Self::StreakBreak => "streak_break",
+            Self::ProgressLag => "progress_lag",
+            Self::GoalCreated => "goal_created",
+            Self::GoalMidway => "goal_midway",
+            Self::TaskSkipped => "task_skipped",
+            Self::StreakRecovery => "streak_recovery",
+        }
+    }
 }
 
 /// 鼓励语偏好设置（P1-4：用户偏好设置）

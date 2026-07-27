@@ -300,9 +300,7 @@ export interface Encouragement {
   context_tags?: string;
   /** P2-5：隐藏标记（仅预设文案可隐藏） */
   hidden?: number;
-  /** P3-1：权重（用于加权随机，默认1.0） */
-  weight?: number;
-  /** P3-5：排序（用于拖拽排序，默认0） */
+  /** P3-5：自定义排序顺序 */
   sort_order?: number;
 }
 
@@ -324,7 +322,8 @@ export type EncouragementTriggerSource =
   | "goal_created" // P2-2：新建目标
   | "goal_midway" // P2-2：目标进度 50%
   | "task_skipped" // P2-2：跳过任务
-  | "streak_recovery"; // P2-2：中断后恢复
+  | "streak_recovery" // P2-2：中断后恢复
+  | "app_first_open"; // P2-2：每日首次打开应用
 
 /** 更新鼓励语输入（P0-5：补齐编辑功能，仅自定义文案可修改） */
 export interface UpdateEncouragementInput {
@@ -548,20 +547,4 @@ export interface DeleteTasksBatchResult {
   deleted_count: number;
   /** 受影响的 goal_id 列表（去重） */
   affected_goal_ids: string[];
-}
-
-/** 用户收藏（P3-2） */
-export interface UserFavorite {
-  id: string;
-  encouragement_id: string;
-  created_at: string;
-}
-
-/** 鼓励语反馈（P3-3） */
-export interface EncouragementFeedback {
-  id: string;
-  encouragement_id: string;
-  /** like | dislike */
-  feedback_type: "like" | "dislike";
-  created_at: string;
 }

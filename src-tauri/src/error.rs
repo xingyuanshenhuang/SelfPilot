@@ -19,9 +19,6 @@ pub enum AppError {
 
     #[error("内部错误: {0}")]
     Internal(String),
-
-    #[error("JSON 序列化错误: {0}")]
-    Json(#[from] serde_json::Error),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

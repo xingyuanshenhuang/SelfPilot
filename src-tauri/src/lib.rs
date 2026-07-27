@@ -113,18 +113,17 @@ pub fn run() {
             commands::encouragement::hide_preset_encouragement,
             commands::encouragement::reset_hidden_presets,
             // P3-2: 用户收藏机制
-            commands::encouragement::add_favorite,
-            commands::encouragement::remove_favorite,
-            commands::encouragement::list_favorites,
+            commands::encouragement::toggle_favorite,
+            commands::encouragement::get_favorites,
+            commands::encouragement::is_favorite,
             // P3-3: 展示反馈学习
-            commands::encouragement::record_feedback,
-            commands::encouragement::get_feedback_stats,
-            // P3-5: 拖拽排序
+            commands::encouragement::log_encouragement_close,
+            commands::encouragement::get_encouragement_stats,
+            // P3-4: longest_streak 信号利用
+            commands::encouragement::check_longest_streak_milestone,
+            commands::encouragement::random_longest_streak_encouragement,
+            // P3-5: 拖拽排序与自定义顺序
             commands::encouragement::update_encouragement_order,
-            commands::encouragement::batch_update_encouragement_order,
-            // P3-6: 独立导入导出
-            commands::encouragement::export_encouragements,
-            commands::encouragement::import_encouragements,
             // 备份相关
             commands::backup::export_data,
             commands::backup::export_data_to_file,

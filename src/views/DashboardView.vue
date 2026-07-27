@@ -106,9 +106,21 @@ onMounted(async () => {
     goalStore.fetchProgresses(),
     encStore.fetchSettings(), // P1-4：确保 settings 已加载
   ]);
-  // P0-1：banner 文案改用 encStore.random（统一文案源，含展示去重）
-  const enc = await encStore.random("dashboard_banner");
-  encouragement.value = enc?.text ?? "";
+
+  // P2-2：判断是否当日首次打开应用
+  const today = new Date().toISOString().split("T")[0];
+  const lastOpenDate = localStorage.getItem("selfpilot_last_open_date");
+  const isFirstOpen = lastOpenDate !== today;
+
+  // P0-1 + P2-2：banner 文案，首次打开用 app_first_open，否则用 dashboard_banner
+  if (isFirstOpen) {
+    const enc = await encStore.random("app_first_open");
+    encouragement.value = enc?.text ?? "";
+    localStorage.setItem("selfpilot_last_open_date", today);
+  } else {
+    const enc = await encStore.random("dashboard_banner");
+    encouragement.value = enc?.text ?? "";
+  }
 
   // P1-2：挫折场景检测（仅在鼓励语开关开启时）
   if (encStore.settings.enabled) {

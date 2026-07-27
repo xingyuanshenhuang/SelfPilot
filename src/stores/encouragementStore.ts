@@ -8,7 +8,6 @@ import type {
   EncouragementTriggerSource,
   EncouragementSettings,
   UpdateEncouragementSettingsInput,
-  UserFavorite,
 } from "@/types";
 
 /**
@@ -50,14 +49,6 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     list.value.filter((e) => e.category === "custom"),
   );
 
-  // P3-2：用户收藏列表
-  const favorites = ref<Set<string>>(new Set());
-
-  /** 判断是否已收藏 */
-  function isFavorite(id: string): boolean {
-    return favorites.value.has(id);
-  }
-
   /** 按等级分组 */
   const byLevel = computed(() => {
     const groups: Record<EncouragementLevel, Encouragement[]> = {
@@ -83,33 +74,6 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     } catch {
       list.value = [];
     }
-  }
-
-  // P3-2：加载收藏列表
-  async function fetchFavorites() {
-    try {
-      const list: UserFavorite[] = await encApi.listFavorites();
-      favorites.value = new Set(list.map((f) => f.encouragement_id));
-    } catch {
-      favorites.value = new Set();
-    }
-  }
-
-  // P3-2：添加收藏
-  async function addFavorite(id: string) {
-    await encApi.addFavorite(id);
-    favorites.value.add(id);
-  }
-
-  // P3-2：移除收藏
-  async function removeFavorite(id: string) {
-    await encApi.removeFavorite(id);
-    favorites.value.delete(id);
-  }
-
-  // P3-3：记录反馈
-  async function recordFeedback(id: string, type: "like" | "dislike") {
-    await encApi.recordFeedback(id, type);
   }
 
   /** 加载连续天数 */
@@ -193,16 +157,14 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     return pickFallback();
   }
 
-  /** 根据连续天数智能抽取鼓励语（Sprint 5 个性化规则 + P0-4 去重 + P3-4 longest_streak） */
+  /** 根据连续天数智能抽取鼓励语（Sprint 5 个性化规则 + P0-4 去重） */
   async function randomByStreak(
     streakDays: number,
-    longestStreakDays: number,
     triggerSource: EncouragementTriggerSource = "complete_first",
   ): Promise<Encouragement | null> {
     try {
       const enc = await encApi.randomEncouragementByStreak(
         streakDays,
-        longestStreakDays,
         triggerSource,
       );
       if (enc) return enc;
@@ -226,22 +188,51 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     }
   }
 
+  // P3-2：收藏状态管理
+  const favorites = ref<Set<string>>(new Set());
+
+  /** 加载收藏列表 */
+  async function fetchFavorites() {
+    try {
+      const list = await encApi.getFavorites();
+      favorites.value = new Set(list.map((e) => e.id));
+    } catch {
+      favorites.value.clear();
+    }
+  }
+
+  /** 切换收藏状态 */
+  async function toggleFavoriteStatus(id: string): Promise<boolean> {
+    try {
+      const isFav = await encApi.toggleFavorite(id);
+      if (isFav) {
+        favorites.value.add(id);
+      } else {
+        favorites.value.delete(id);
+      }
+      return isFav;
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  /** 检查是否已收藏 */
+  function isFavorited(id: string): boolean {
+    return favorites.value.has(id);
+  }
+
   return {
     list,
     streak,
     loaded,
     settings,
-    favorites,
     presetList,
     customList,
     byLevel,
+    favorites,
     fetchAll,
     fetchStreak,
     fetchSettings,
-    fetchFavorites,
-    addFavorite,
-    removeFavorite,
-    recordFeedback,
     add,
     update,
     updateSettings,
@@ -249,6 +240,8 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     random,
     randomByStreak,
     randomCelebration,
-    isFavorite,
+    fetchFavorites,
+    toggleFavoriteStatus,
+    isFavorited,
   };
 });

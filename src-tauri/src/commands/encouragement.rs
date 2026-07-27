@@ -1,10 +1,11 @@
 use chrono::Timelike;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
 use crate::db::models::{
-    AddEncouragementInput, Encouragement, EncouragementFeedback, LaggingGoal, SetbackSituation,
-    StreakInfo, UpdateEncouragementInput, UserFavorite,
+    AddEncouragementInput, Encouragement, EncouragementTriggerSource, LaggingGoal,
+    SetbackSituation, StreakInfo, UpdateEncouragementInput,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
@@ -44,7 +45,7 @@ fn get_current_time_period() -> &'static str {
     }
 }
 
-/// 从指定等级桶中随机抽取一条，排除指定 ids（P0-3 + P2-3：时段过滤）
+/// 从指定等级桶中随机抽取一条，排除指定 ids（P0-3 + P2-3：时段过滤 + P3-1：加权随机）
 async fn pick_by_level(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     level: &str,
@@ -53,52 +54,177 @@ async fn pick_by_level(
     // P2-3：获取当前时段
     let time_period = get_current_time_period();
 
-    // 优先筛选包含当前时段的文案
-    let mut builder =
-        QueryBuilder::<sqlx::Sqlite>::new("SELECT * FROM encouragements WHERE level = ");
+    // P3-1：查询最近5条展示记录（用于惩罚）
+    let recent_shown: Vec<String> = sqlx::query_scalar(
+        "SELECT encouragement_id FROM encouragement_show_log ORDER BY shown_at DESC LIMIT 5"
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    // P3-1：查询所有候选文案（包含展示次数、收藏状态）
+    let mut builder = QueryBuilder::<sqlx::Sqlite>::new(
+        r#"
+        SELECT
+            e.*,
+            COUNT(DISTINCT l.id) as show_count,
+            CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
+        FROM encouragements e
+        LEFT JOIN encouragement_show_log l ON e.id = l.encouragement_id
+        LEFT JOIN encouragement_favorites f ON e.id = f.encouragement_id
+        WHERE e.level = ?
+        AND e.hidden = 0
+        AND e.context_tags LIKE ?
+        "#
+    );
     builder.push_bind(level);
-    builder.push(" AND hidden = 0"); // P2-5：排除隐藏的预设文案
-    builder.push(" AND context_tags LIKE ");
     builder.push_bind(format!("%\"time\":\"{}\"", time_period));
     if !exclude_ids.is_empty() {
-        builder.push(" AND id NOT IN (");
+        builder.push(" AND e.id NOT IN (");
         let mut sep = builder.separated(", ");
         for id in exclude_ids {
             sep.push_bind(id);
         }
         builder.push(")");
     }
-    builder.push(" ORDER BY RANDOM() LIMIT 1");
+    builder.push(" GROUP BY e.id");
 
-    let item: Option<Encouragement> = builder
-        .build_query_as::<Encouragement>()
-        .fetch_optional(&mut **tx)
+    let candidates: Vec<CandidateWithStats> = builder
+        .build_query_as::<CandidateWithStats>()
+        .fetch_all(&mut **tx)
         .await?;
 
-    // 如果没找到时段匹配的，降级为无标签文案
-    if item.is_some() {
-        return Ok(item);
-    }
-
-    // 降级：筛选无标签或任意文案
-    let mut builder =
-        QueryBuilder::<sqlx::Sqlite>::new("SELECT * FROM encouragements WHERE level = ");
-    builder.push_bind(level);
-    builder.push(" AND hidden = 0");
-    if !exclude_ids.is_empty() {
-        builder.push(" AND id NOT IN (");
-        let mut sep = builder.separated(", ");
-        for id in exclude_ids {
-            sep.push_bind(id);
+    // 如果没有时段匹配的候选，降级为无标签文案
+    if candidates.is_empty() {
+        let mut builder = QueryBuilder::<sqlx::Sqlite>::new(
+            r#"
+            SELECT
+                e.*,
+                COUNT(DISTINCT l.id) as show_count,
+                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
+            FROM encouragements e
+            LEFT JOIN encouragement_show_log l ON e.id = l.encouragement_id
+            LEFT JOIN encouragement_favorites f ON e.id = f.encouragement_id
+            WHERE e.level = ?
+            AND e.hidden = 0
+            "#
+        );
+        builder.push_bind(level);
+        if !exclude_ids.is_empty() {
+            builder.push(" AND e.id NOT IN (");
+            let mut sep = builder.separated(", ");
+            for id in exclude_ids {
+                sep.push_bind(id);
+            }
+            builder.push(")");
         }
-        builder.push(")");
+        builder.push(" GROUP BY e.id");
+
+        let fallback_candidates: Vec<CandidateWithStats> = builder
+            .build_query_as::<CandidateWithStats>()
+            .fetch_all(&mut **tx)
+            .await?;
+
+        if fallback_candidates.is_empty() {
+            return Ok(None);
+        }
+
+        return Ok(Some(weighted_random_pick(fallback_candidates, &recent_shown)));
     }
-    builder.push(" ORDER BY RANDOM() LIMIT 1");
-    let item: Option<Encouragement> = builder
-        .build_query_as::<Encouragement>()
-        .fetch_optional(&mut **tx)
-        .await?;
-    Ok(item)
+
+    Ok(Some(weighted_random_pick(candidates, &recent_shown)))
+}
+
+/// P3-1：候选文案（包含统计信息）
+#[derive(sqlx::FromRow)]
+struct CandidateWithStats {
+    id: String,
+    text: String,
+    category: String,
+    level: String,
+    created_at: String,
+    context_tags: Option<String>,
+    hidden: Option<i32>,
+    sort_order: Option<i64>,
+    show_count: i64,
+    is_favorite: i64,
+}
+
+/// P3-1：加权随机抽取（从候选列表中按权重随机选择）
+fn weighted_random_pick(candidates: Vec<CandidateWithStats>, recent_shown_ids: &[String]) -> Encouragement {
+    use rand::Rng;
+
+    if candidates.is_empty() {
+        panic!("candidates should not be empty");
+    }
+
+    // 计算每条文案的权重
+    let base_weight = 1.0;
+    let mut weighted: Vec<(f64, &CandidateWithStats)> = Vec::new();
+
+    for candidate in &candidates {
+        let mut weight = base_weight;
+
+        // 新文案加成：7天内权重 ×3
+        let created_at = chrono::DateTime::parse_from_rfc3339(&candidate.created_at);
+        if let Ok(created) = created_at {
+            let now = chrono::Utc::now();
+            let days = (now - created.with_timezone(&chrono::Utc)).num_days();
+            if days <= 7 {
+                weight *= 3.0;
+            }
+        }
+
+        // 低频文案加成：展示次数 <3 权重 ×2
+        if candidate.show_count < 3 {
+            weight *= 2.0;
+        }
+
+        // 收藏文案加成：权重 ×2
+        if candidate.is_favorite > 0 {
+            weight *= 2.0;
+        }
+
+        // 最近展示惩罚：权重 ×0.1
+        if recent_shown_ids.contains(&candidate.id) {
+            weight *= 0.1;
+        }
+
+        weighted.push((weight, candidate));
+    }
+
+    // 加权随机抽取
+    let total_weight: f64 = weighted.iter().map(|(w, _)| w).sum();
+    let mut rng = rand::thread_rng();
+    let mut random_val = rng.gen_range(0.0..total_weight);
+
+    for (weight, candidate) in weighted {
+        random_val -= weight;
+        if random_val <= 0.0 {
+            return Encouragement {
+                id: candidate.id.clone(),
+                text: candidate.text.clone(),
+                category: candidate.category.clone(),
+                level: candidate.level.clone(),
+                created_at: candidate.created_at.clone(),
+                context_tags: candidate.context_tags.clone(),
+                hidden: candidate.hidden,
+                sort_order: candidate.sort_order,
+            };
+        }
+    }
+
+    // 不应该到达这里，返回最后一个
+    let last = candidates.last().unwrap();
+    Encouragement {
+        id: last.id.clone(),
+        text: last.text.clone(),
+        category: last.category.clone(),
+        level: last.level.clone(),
+        created_at: last.created_at.clone(),
+        context_tags: last.context_tags.clone(),
+        hidden: last.hidden,
+        sort_order: last.sort_order,
+    }
 }
 
 /// 从全库随机抽取一条，排除指定 ids（无等级过滤，P2-5：排除隐藏）
@@ -179,7 +305,7 @@ async fn log_show(
 #[tauri::command]
 pub async fn list_encouragements(state: State<'_, DbPool>) -> AppResult<Vec<Encouragement>> {
     let list: Vec<Encouragement> =
-        sqlx::query_as("SELECT * FROM encouragements ORDER BY created_at")
+        sqlx::query_as("SELECT * FROM encouragements ORDER BY sort_order, created_at")
             .fetch_all(&state.0)
             .await?;
     Ok(list)
@@ -215,13 +341,22 @@ pub async fn add_encouragement(
         .format("%Y-%m-%dT%H:%M:%S")
         .to_string();
 
+    // P3-5：计算当前最大 sort_order + 1，确保新增项排到最后
+    let max_sort_order: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(sort_order) FROM encouragements",
+    )
+    .fetch_one(&state.0)
+    .await?;
+    let sort_order = max_sort_order.unwrap_or(0) + 1;
+
     sqlx::query(
-        "INSERT INTO encouragements (id, text, category, level, created_at) VALUES (?, ?, 'custom', ?, ?)",
+        "INSERT INTO encouragements (id, text, category, level, created_at, sort_order) VALUES (?, ?, 'custom', ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.text)
     .bind(&level)
     .bind(&now)
+    .bind(sort_order)
     .execute(&state.0)
     .await?;
 
@@ -372,14 +507,9 @@ pub async fn random_encouragement(
 ///
 /// P0-3：统一降级链为 `目标等级 → normal → 全库`
 /// P0-4：排除最近 DEDUP_WINDOW 条展示记录，事务保证原子性
-/// P3-4：根据 longest_streak 调整等级优先级
-///   - longest_streak >= 30：expert 级别，优先 celebration/highlight
-///   - longest_streak >= 14：专业级，优先 highlight/advanced
-///   - 其他：正常推荐
 #[tauri::command]
 pub async fn random_encouragement_by_streak(
     streak: i64,
-    longest_streak: i64,
     trigger_source: String,
     state: State<'_, DbPool>,
 ) -> AppResult<Option<Encouragement>> {
@@ -387,28 +517,20 @@ pub async fn random_encouragement_by_streak(
 
     let exclude_ids = recent_shown_ids(&mut tx).await?;
 
-    // P3-4：根据 longest_streak 调整等级优先级
-    let levels: Vec<&str> = if longest_streak >= 30 {
-        // Expert 级别：优先 celebration/highlight
-        vec!["celebration", "highlight", "advanced", "normal"]
-    } else if longest_streak >= 14 {
-        // 专业级：优先 highlight/advanced
-        vec!["highlight", "advanced", "normal"]
+    // 确定目标等级
+    let target_level = if streak >= 7 {
+        "highlight"
+    } else if streak >= 3 {
+        "advanced"
     } else {
-        // 正常推荐：根据当前连续天数
-        let target_level = if streak >= 7 {
-            "highlight"
-        } else if streak >= 3 {
-            "advanced"
-        } else {
-            "normal"
-        };
+        "normal"
+    };
 
-        if target_level == "normal" {
-            vec!["normal"]
-        } else {
-            vec![target_level, "normal"]
-        }
+    // 降级链：目标等级 → normal → （全库兜底）
+    let levels: Vec<&str> = if target_level == "normal" {
+        vec!["normal"]
+    } else {
+        vec![target_level, "normal"]
     };
 
     let item = random_with_fallback(&mut tx, &levels, &exclude_ids).await?;
@@ -1006,196 +1128,253 @@ pub async fn reset_hidden_presets(state: State<'_, DbPool>) -> AppResult<i64> {
 // P3-2：用户收藏机制
 // ============================================================
 
-/// 添加收藏
+/// 切换收藏状态（已收藏则取消，未收藏则添加）
 #[tauri::command]
-pub async fn add_favorite(
-    encouragement_id: String,
-    state: State<'_, DbPool>,
-) -> AppResult<UserFavorite> {
+pub async fn toggle_favorite(id: String, state: State<'_, DbPool>) -> AppResult<bool> {
     // 检查是否已收藏
-    let exists: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM user_favorites WHERE encouragement_id = ?",
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM encouragement_favorites WHERE encouragement_id = ?",
     )
-    .bind(&encouragement_id)
+    .bind(&id)
     .fetch_optional(&state.0)
     .await?;
 
-    if exists.is_some() {
-        return Err(AppError::Business("已收藏".into()));
-    }
-
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-
-    sqlx::query("INSERT INTO user_favorites (id, encouragement_id, created_at) VALUES (?, ?, ?)")
+    if let Some(_) = existing {
+        // 已收藏，取消收藏
+        sqlx::query("DELETE FROM encouragement_favorites WHERE encouragement_id = ?")
+            .bind(&id)
+            .execute(&state.0)
+            .await?;
+        Ok(false)
+    } else {
+        // 未收藏，添加收藏
+        let favorite_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO encouragement_favorites (id, encouragement_id, favorited_at) VALUES (?, ?, ?)",
+        )
+        .bind(&favorite_id)
         .bind(&id)
-        .bind(&encouragement_id)
         .bind(&now)
         .execute(&state.0)
         .await?;
-
-    // 更新权重（收藏文案权重×2）
-    sqlx::query("UPDATE encouragements SET weight = weight * 2 WHERE id = ?")
-        .bind(&encouragement_id)
-        .execute(&state.0)
-        .await?;
-
-    let favorite: UserFavorite = sqlx::query_as("SELECT * FROM user_favorites WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.0)
-        .await?;
-
-    Ok(favorite)
+        Ok(true)
+    }
 }
 
-/// 取消收藏
+/// 获取收藏的鼓励语列表
 #[tauri::command]
-pub async fn remove_favorite(
-    encouragement_id: String,
-    state: State<'_, DbPool>,
-) -> AppResult<()> {
-    // 恢复权重
-    sqlx::query("UPDATE encouragements SET weight = weight / 2 WHERE id = ?")
-        .bind(&encouragement_id)
-        .execute(&state.0)
-        .await?;
-
-    sqlx::query("DELETE FROM user_favorites WHERE encouragement_id = ?")
-        .bind(&encouragement_id)
-        .execute(&state.0)
-        .await?;
-
-    Ok(())
-}
-
-/// 列出收藏
-#[tauri::command]
-pub async fn list_favorites(state: State<'_, DbPool>) -> AppResult<Vec<Encouragement>> {
-    let list: Vec<Encouragement> = sqlx::query_as(
-        "SELECT e.* FROM encouragements e
-         INNER JOIN user_favorites f ON e.id = f.encouragement_id
-         ORDER BY f.created_at DESC",
+pub async fn get_favorites(state: State<'_, DbPool>) -> AppResult<Vec<Encouragement>> {
+    let favorites = sqlx::query_as::<_, Encouragement>(
+        r#"
+        SELECT e.* FROM encouragements e
+        INNER JOIN encouragement_favorites f ON e.id = f.encouragement_id
+        ORDER BY f.favorited_at DESC
+        "#,
     )
     .fetch_all(&state.0)
     .await?;
-    Ok(list)
+    Ok(favorites)
+}
+
+/// 检查鼓励语是否已收藏
+#[tauri::command]
+pub async fn is_favorite(id: String, state: State<'_, DbPool>) -> AppResult<bool> {
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM encouragement_favorites WHERE encouragement_id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.0)
+    .await?;
+    Ok(existing.is_some())
 }
 
 // ============================================================
 // P3-3：展示反馈学习
 // ============================================================
 
-/// 记录反馈
+/// 记录用户关闭鼓励语弹窗的行为
 #[tauri::command]
-pub async fn record_feedback(
-    encouragement_id: String,
-    feedback_type: String,
-    state: State<'_, DbPool>,
-) -> AppResult<EncouragementFeedback> {
-    if feedback_type != "like" && feedback_type != "dislike" {
-        return Err(AppError::Param("feedback_type 必须是 like 或 dislike".into()));
-    }
-
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-
-    sqlx::query(
-        "INSERT INTO encouragement_feedback (id, encouragement_id, feedback_type, created_at) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&encouragement_id)
-    .bind(&feedback_type)
-    .bind(&now)
-    .execute(&state.0)
-    .await?;
-
-    // 根据反馈调整权重
-    if feedback_type == "like" {
-        sqlx::query("UPDATE encouragements SET weight = weight * 1.1 WHERE id = ?")
-            .bind(&encouragement_id)
-            .execute(&state.0)
-            .await?;
-    } else {
-        sqlx::query("UPDATE encouragements SET weight = weight * 0.9 WHERE id = ?")
-            .bind(&encouragement_id)
-            .execute(&state.0)
-            .await?;
-    }
-
-    let feedback: EncouragementFeedback =
-        sqlx::query_as("SELECT * FROM encouragement_feedback WHERE id = ?")
-            .bind(&id)
-            .fetch_one(&state.0)
-            .await?;
-
-    Ok(feedback)
-}
-
-/// 获取反馈统计
-#[tauri::command]
-pub async fn get_feedback_stats(
-    encouragement_id: String,
-    state: State<'_, DbPool>,
-) -> AppResult<(i64, i64)> {
-    let likes: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM encouragement_feedback WHERE encouragement_id = ? AND feedback_type = 'like'",
-    )
-    .bind(&encouragement_id)
-    .fetch_one(&state.0)
-    .await?;
-
-    let dislikes: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM encouragement_feedback WHERE encouragement_id = ? AND feedback_type = 'dislike'",
-    )
-    .bind(&encouragement_id)
-    .fetch_one(&state.0)
-    .await?;
-
-    Ok((likes, dislikes))
-}
-
-// ============================================================
-// P3-5：拖拽排序
-// ============================================================
-
-/// 更新鼓励语排序（仅自定义文案可排序）
-#[tauri::command]
-pub async fn update_encouragement_order(
+pub async fn log_encouragement_close(
     id: String,
-    sort_order: i32,
+    view_duration: i64,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
-    let item: Encouragement = sqlx::query_as("SELECT * FROM encouragements WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&state.0)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("鼓励语 {} 不存在", id)))?;
+    let closed_at = chrono::Utc::now().to_rfc3339();
 
-    if item.category == "preset" {
-        return Err(AppError::Business("预设鼓励语不支持排序".into()));
-    }
-
-    sqlx::query("UPDATE encouragements SET sort_order = ? WHERE id = ?")
-        .bind(sort_order)
-        .bind(&id)
-        .execute(&state.0)
-        .await?;
+    // 更新最新的展示记录
+    sqlx::query(
+        r#"
+        UPDATE encouragement_show_log
+        SET closed_at = ?, view_duration = ?
+        WHERE id = (
+            SELECT id FROM encouragement_show_log
+            WHERE encouragement_id = ?
+            ORDER BY shown_at DESC
+            LIMIT 1
+        )
+        "#,
+    )
+    .bind(&closed_at)
+    .bind(view_duration)
+    .bind(&id)
+    .execute(&state.0)
+    .await?;
 
     Ok(())
 }
 
-/// 批量更新排序（用于拖拽后批量更新）
+/// 获取鼓励语展示统计
 #[tauri::command]
-pub async fn batch_update_encouragement_order(
-    orders: Vec<(String, i32)>,
+pub async fn get_encouragement_stats(
+    id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<EncouragementStats> {
+    // 总展示次数
+    let total_shows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM encouragement_show_log WHERE encouragement_id = ?",
+    )
+    .bind(&id)
+    .fetch_one(&state.0)
+    .await?;
+
+    // 平均观看时长（秒）
+    let avg_duration: Option<f64> = sqlx::query_scalar(
+        "SELECT AVG(view_duration) FROM encouragement_show_log WHERE encouragement_id = ? AND view_duration IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_optional(&state.0)
+    .await?;
+
+    // 最近一次展示时间
+    let last_shown: Option<String> = sqlx::query_scalar(
+        "SELECT shown_at FROM encouragement_show_log WHERE encouragement_id = ? ORDER BY shown_at DESC LIMIT 1",
+    )
+    .bind(&id)
+    .fetch_optional(&state.0)
+    .await?;
+
+    Ok(EncouragementStats {
+        total_shows,
+        avg_duration: avg_duration.unwrap_or(0.0),
+        last_shown,
+    })
+}
+
+/// 鼓励语展示统计
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncouragementStats {
+    /// 总展示次数
+    pub total_shows: i64,
+    /// 平均观看时长（秒）
+    pub avg_duration: f64,
+    /// 最近一次展示时间
+    pub last_shown: Option<String>,
+}
+
+// ============================================================
+// P3-4：longest_streak 信号利用
+// ============================================================
+
+/// 检测是否接近/超越历史最长连续天数
+#[tauri::command]
+pub async fn check_longest_streak_milestone(
+    state: State<'_, DbPool>,
+) -> AppResult<Option<StreakMilestone>> {
+    let streak_info = get_streak(state).await?;
+
+    // 接近历史记录：current_streak >= longest_streak - 2 且 < longest_streak
+    // 超越历史记录：current_streak >= longest_streak
+    let current = streak_info.current_streak;
+    let longest = streak_info.longest_streak;
+
+    if current >= longest && longest > 0 {
+        // 超越或追平历史记录
+        Ok(Some(StreakMilestone {
+            milestone_type: if current > longest {
+                "超越历史".to_string()
+            } else {
+                "追平历史".to_string()
+            },
+            current_streak: current,
+            longest_streak: longest,
+        }))
+    } else if current >= longest - 2 && longest > 0 {
+        // 接近历史记录（距离 2 天内）
+        Ok(Some(StreakMilestone {
+            milestone_type: "接近历史".to_string(),
+            current_streak: current,
+            longest_streak: longest,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 抽取 longest_streak 触发的鼓励语
+#[tauri::command]
+pub async fn random_longest_streak_encouragement(
+    trigger_source: EncouragementTriggerSource,
+    state: State<'_, DbPool>,
+) -> AppResult<Option<Encouragement>> {
+    let mut tx = state.0.begin().await?;
+
+    // 查询最近5条展示记录（去重）
+    let recent_shown: Vec<String> = sqlx::query_scalar(
+        "SELECT encouragement_id FROM encouragement_show_log ORDER BY shown_at DESC LIMIT 5"
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // 从 longest_streak 等级抽取（新增的标签）
+    let enc = pick_by_level(&mut tx, "longest_streak", &recent_shown).await?;
+
+    // 记录展示日志
+    if let Some(ref e) = enc {
+        let log_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO encouragement_show_log (id, encouragement_id, shown_at, trigger_source) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&log_id)
+        .bind(&e.id)
+        .bind(&now)
+        .bind(trigger_source.as_ref())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(enc)
+}
+
+/// 连续天数里程碑信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreakMilestone {
+    /// 里程碑类型：接近历史/追平历史/超越历史
+    pub milestone_type: String,
+    /// 当前连续天数
+    pub current_streak: i64,
+    /// 历史最长连续天数
+    pub longest_streak: i64,
+}
+
+// ============================================================
+// P3-5：拖拽排序与自定义顺序
+// ============================================================
+
+/// 更新鼓励语排序顺序（批量）
+#[tauri::command]
+pub async fn update_encouragement_order(
+    items: Vec<EncouragementOrderItem>,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
     let mut tx = state.0.begin().await?;
 
-    for (id, sort_order) in orders {
+    for item in &items {
         sqlx::query("UPDATE encouragements SET sort_order = ? WHERE id = ?")
-            .bind(sort_order)
-            .bind(&id)
+            .bind(item.sort_order)
+            .bind(&item.id)
             .execute(&mut *tx)
             .await?;
     }
@@ -1204,66 +1383,9 @@ pub async fn batch_update_encouragement_order(
     Ok(())
 }
 
-// ============================================================
-// P3-6：独立导入导出
-// ============================================================
-
-/// 导出鼓励语（JSON格式）
-#[tauri::command]
-pub async fn export_encouragements(state: State<'_, DbPool>) -> AppResult<String> {
-    let list: Vec<Encouragement> =
-        sqlx::query_as("SELECT * FROM encouragements ORDER BY created_at")
-            .fetch_all(&state.0)
-            .await?;
-
-    let json = serde_json::to_string(&list)?;
-    Ok(json)
-}
-
-/// 导入鼓励语（JSON格式，去重跳过）
-#[tauri::command]
-pub async fn import_encouragements(
-    json: String,
-    state: State<'_, DbPool>,
-) -> AppResult<(i64, i64)> {
-    let list: Vec<Encouragement> = serde_json::from_str(&json)?;
-
-    let mut imported = 0i64;
-    let mut skipped = 0i64;
-
-    for item in list {
-        // 去重检测（忽略大小写）
-        let exists: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM encouragements WHERE LOWER(text) = ? LIMIT 1",
-        )
-        .bind(item.text.to_lowercase())
-        .fetch_optional(&state.0)
-        .await?;
-
-        if exists.is_some() {
-            skipped += 1;
-            continue;
-        }
-
-        let id = Uuid::new_v4().to_string();
-        let now = chrono::Local::now()
-            .format("%Y-%m-%dT%H:%M:%S")
-            .to_string();
-
-        sqlx::query(
-            "INSERT INTO encouragements (id, text, category, level, created_at, context_tags, hidden, weight, sort_order)
-             VALUES (?, ?, 'imported', ?, ?, ?, 0, 1.0, 0)",
-        )
-        .bind(&id)
-        .bind(&item.text)
-        .bind(&item.level)
-        .bind(&now)
-        .bind(&item.context_tags)
-        .execute(&state.0)
-        .await?;
-
-        imported += 1;
-    }
-
-    Ok((imported, skipped))
+/// 排序项输入
+#[derive(Debug, Clone, Deserialize)]
+pub struct EncouragementOrderItem {
+    pub id: String,
+    pub sort_order: i64,
 }

@@ -42,7 +42,7 @@ const deletingId = ref<string | null>(null);
 // P1-6：搜索筛选状态
 const searchKeyword = ref("");
 const filterLevel = ref<EncouragementLevel | "">("");
-const filterSource = ref<"preset" | "custom" | "">("");
+const filterSource = ref<"preset" | "custom" | "favorite" | "">("");
 
 // P1-5：批量操作状态
 const batchMode = ref(false);
@@ -50,10 +50,13 @@ const selectedIds = ref<Set<string>>(new Set());
 const batchLevel = ref<EncouragementLevel>("normal");
 const batchDeleting = ref(false);
 
-// P3-6：导入导出状态
-const showImportModal = ref(false);
-const importJson = ref("");
-const importing = ref(false);
+// P3-5：拖拽排序状态
+const draggingId = ref<string | null>(null);
+const dragOverId = ref<string | null>(null);
+const dragOverPosition = ref<"before" | "after">("after");
+const savingOrder = ref(false);
+// P3-5：放置后确认闪烁
+const droppedItemId = ref<string | null>(null);
 
 const levelOptions = [
   { label: "普通（1天连续）", value: "normal" },
@@ -166,6 +169,149 @@ async function handleEditSave() {
   }
 }
 
+/** P2-6：复制文案到剪贴板 */
+function handleCopy(item: Encouragement) {
+  navigator.clipboard
+    .writeText(item.text)
+    .then(() => {
+      message.success("已复制到剪贴板");
+    })
+    .catch(() => {
+      message.error("复制失败");
+    });
+}
+
+/** P3-2：切换收藏状态 */
+async function handleToggleFavorite(item: Encouragement) {
+  try {
+    const isFav = await store.toggleFavoriteStatus(item.id);
+    message.success(isFav ? "已收藏" : "已取消收藏");
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+// ============================================================
+// P3-5：拖拽排序
+// ============================================================
+
+/** 拖拽开始（筛选模式下禁用） */
+function handleDragStart(item: Encouragement, e: DragEvent) {
+  if (hasFilter.value) {
+    e.preventDefault();
+    return;
+  }
+  draggingId.value = item.id;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", item.id);
+  }
+}
+
+/** 拖拽结束 */
+function handleDragEnd() {
+  draggingId.value = null;
+  dragOverId.value = null;
+  dragOverPosition.value = "after";
+  droppedItemId.value = null;
+}
+
+/** 拖拽经过 */
+function handleDragOver(item: Encouragement, e: DragEvent) {
+  e.preventDefault();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "move";
+  }
+  dragOverId.value = item.id;
+
+  // 计算放置位置（上半部分 = before，下半部分 = after）
+  const target = e.currentTarget as HTMLElement;
+  const rect = target.getBoundingClientRect();
+  const midY = rect.top + rect.height / 2;
+  dragOverPosition.value = e.clientY < midY ? "before" : "after";
+}
+
+/** 拖拽离开 */
+function handleDragLeave() {
+  dragOverId.value = null;
+}
+
+/** 放置 */
+async function handleDrop(item: Encouragement, e: DragEvent) {
+  e.preventDefault();
+  const sourceId = draggingId.value;
+  if (!sourceId || sourceId === item.id) {
+    handleDragEnd();
+    return;
+  }
+
+  // 计算新顺序
+  const level = item.level;
+  const list = [...presetByLevel.value[level], ...customByLevel.value[level]];
+  const sourceIdx = list.findIndex((i) => i.id === sourceId);
+  const targetIdx = list.findIndex((i) => i.id === item.id);
+  if (sourceIdx === -1 || targetIdx === -1) {
+    handleDragEnd();
+    return;
+  }
+
+  // 移动元素（修复 splice 后 targetIdx 偏移）
+  const [moved] = list.splice(sourceIdx, 1);
+  const adjustedTargetIdx = sourceIdx < targetIdx ? targetIdx - 1 : targetIdx;
+  const insertIdx =
+    dragOverPosition.value === "before"
+      ? adjustedTargetIdx
+      : adjustedTargetIdx + 1;
+  list.splice(insertIdx, 0, moved);
+
+  // 生成排序数据
+  const orderItems = list.map((i, idx) => ({ id: i.id, sort_order: idx }));
+
+  savingOrder.value = true;
+  try {
+    await encApi.updateEncouragementOrder(orderItems);
+    await store.fetchAll();
+    // 放置后确认闪烁
+    droppedItemId.value = sourceId;
+    setTimeout(() => {
+      droppedItemId.value = null;
+    }, 800);
+    message.success("已调整顺序");
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    savingOrder.value = false;
+    handleDragEnd();
+  }
+}
+
+/** 获取拖拽视觉反馈样式（语义化 CSS 类） */
+function getDragClass(item: Encouragement): string {
+  const classes: string[] = [];
+
+  // 拖拽源：半透明 + 缩小
+  if (draggingId.value === item.id) {
+    classes.push("enc-dragging");
+  }
+
+  // 悬停目标：背景高亮 + 插入指示线
+  if (dragOverId.value === item.id) {
+    classes.push("enc-drag-over");
+    classes.push(
+      dragOverPosition.value === "before"
+        ? "enc-drop-before"
+        : "enc-drop-after",
+    );
+  }
+
+  // 放置后确认闪烁
+  if (droppedItemId.value === item.id) {
+    classes.push("enc-dropped");
+  }
+
+  return classes.join(" ");
+}
+
 /** P0-6：删除反馈增强 — 回显被删文案前 12 字 + 防连点 */
 async function handleDelete(item: Encouragement) {
   deletingId.value = item.id;
@@ -203,8 +349,22 @@ const customByLevel = computed(() => {
   return groups;
 });
 
-/** 按等级分组的预设鼓励语 */
-const presetByLevel = computed(() => store.byLevel);
+/** 按等级分组的预设鼓励语（仅含 category=preset） */
+const presetByLevel = computed(() => {
+  const groups: Record<EncouragementLevel, Encouragement[]> = {
+    normal: [],
+    advanced: [],
+    highlight: [],
+    celebration: [],
+    setback: [],
+  };
+  for (const e of store.presetList) {
+    if (groups[e.level]) {
+      groups[e.level].push(e);
+    }
+  }
+  return groups;
+});
 
 // ============================================================
 // P1-6：搜索筛选
@@ -226,6 +386,10 @@ function filterByLevel(list: Encouragement[]): Encouragement[] {
 /** 根据来源筛选 */
 function filterBySource(list: Encouragement[]): Encouragement[] {
   if (!filterSource.value) return list;
+  if (filterSource.value === "favorite") {
+    // P3-2：筛选收藏的文案
+    return list.filter((e) => store.isFavorited(e.id));
+  }
   return list.filter((e) => e.category === filterSource.value);
 }
 
@@ -288,6 +452,32 @@ function toggleSelectAll(list: Encouragement[]) {
   }
 }
 
+/** P1-5 增强：当前可选择的文案列表（仅自定义） */
+const currentSelectableList = computed(() => {
+  if (hasFilter.value) {
+    return filteredCustomList.value;
+  }
+  // 非筛选模式下，返回所有自定义文案
+  return store.customList;
+});
+
+/** P1-5 增强：是否全选当前列表 */
+const isAllSelected = computed(() => {
+  const list = currentSelectableList.value;
+  if (list.length === 0) return false;
+  return list.every((item) => selectedIds.value.has(item.id));
+});
+
+/** P1-5 增强：切换全选当前列表 */
+function toggleSelectAllCurrent() {
+  const list = currentSelectableList.value;
+  if (isAllSelected.value) {
+    list.forEach((item) => selectedIds.value.delete(item.id));
+  } else {
+    list.forEach((item) => selectedIds.value.add(item.id));
+  }
+}
+
 /** 批量删除 */
 async function handleBatchDelete() {
   if (selectedIds.value.size === 0) {
@@ -330,133 +520,6 @@ async function handleBatchUpdateLevel() {
     message.error(String(e));
   } finally {
     batchDeleting.value = false;
-  }
-}
-
-// ============================================================
-// P3-2：收藏与反馈
-// ============================================================
-
-/** 切换收藏状态 */
-async function toggleFavorite(item: Encouragement) {
-  try {
-    if (store.isFavorite(item.id)) {
-      await store.removeFavorite(item.id);
-      message.success("已取消收藏");
-    } else {
-      await store.addFavorite(item.id);
-      message.success("已收藏");
-    }
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-/** 记录反馈 */
-async function handleFeedback(item: Encouragement, type: "like" | "dislike") {
-  try {
-    await store.recordFeedback(item.id, type);
-    message.success(
-      type === "like"
-        ? "感谢反馈，会多推荐这类文案"
-        : "感谢反馈，会减少这类文案",
-    );
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-// ============================================================
-// P3-5：拖拽排序
-// ============================================================
-
-/** 上移鼓励语 */
-async function moveUp(item: Encouragement, level: EncouragementLevel) {
-  const levelList = store.byLevel[level];
-  const idx = levelList.findIndex((e) => e.id === item.id);
-  if (idx <= 0) return;
-
-  const prevItem = levelList[idx - 1];
-  const currentOrder = item.sort_order || 0;
-  const prevOrder = prevItem.sort_order || 0;
-
-  try {
-    // 交换排序值
-    await encApi.batchUpdateEncouragementOrder([
-      [item.id, prevOrder],
-      [prevItem.id, currentOrder],
-    ]);
-    await store.fetchAll();
-    message.success("已上移");
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-/** 下移鼓励语 */
-async function moveDown(item: Encouragement, level: EncouragementLevel) {
-  const levelList = store.byLevel[level];
-  const idx = levelList.findIndex((e) => e.id === item.id);
-  if (idx >= levelList.length - 1) return;
-
-  const nextItem = levelList[idx + 1];
-  const currentOrder = item.sort_order || 0;
-  const nextOrder = nextItem.sort_order || 0;
-
-  try {
-    // 交换排序值
-    await encApi.batchUpdateEncouragementOrder([
-      [item.id, nextOrder],
-      [nextItem.id, currentOrder],
-    ]);
-    await store.fetchAll();
-    message.success("已下移");
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-// ============================================================
-// P3-6：导入导出
-// ============================================================
-
-/** 导出鼓励语 */
-async function handleExport() {
-  try {
-    const json = await encApi.exportEncouragements();
-    // 创建下载
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `encouragements_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    message.success("已导出");
-  } catch (e) {
-    message.error(String(e));
-  }
-}
-
-/** 导入鼓励语 */
-async function handleImport() {
-  if (!importJson.value.trim()) {
-    message.warning("请输入 JSON 内容");
-    return;
-  }
-  importing.value = true;
-  try {
-    const result = await encApi.importEncouragements(importJson.value);
-    message.success(
-      `已导入 ${result.imported} 条，跳过 ${result.skipped} 条重复`,
-    );
-    showImportModal.value = false;
-    importJson.value = "";
-    await store.fetchAll();
-  } catch (e) {
-    message.error(String(e));
-  } finally {
-    importing.value = false;
   }
 }
 </script>
@@ -562,6 +625,7 @@ async function handleImport() {
             { label: '全部来源', value: '' },
             { label: '预设文案', value: 'preset' },
             { label: '自定义文案', value: 'custom' },
+            { label: '我的收藏', value: 'favorite' },
           ]"
           style="width: 140px"
           clearable
@@ -574,6 +638,32 @@ async function handleImport() {
         >
           重置筛选
         </NButton>
+        <!-- 批量模式下显示全选和删除 -->
+        <template v-if="batchMode">
+          <NCheckbox
+            :checked="isAllSelected"
+            @update:checked="toggleSelectAllCurrent"
+          >
+            全选
+          </NCheckbox>
+          <NPopconfirm
+            positive-text="确定"
+            negative-text="取消"
+            @positive-click="handleBatchDelete"
+          >
+            <template #trigger>
+              <NButton
+                type="error"
+                size="small"
+                :disabled="selectedIds.size === 0"
+                :loading="batchDeleting"
+              >
+                删除
+              </NButton>
+            </template>
+            确定删除选中的 {{ selectedIds.size }} 条文案吗？预设文案不会被删除。
+          </NPopconfirm>
+        </template>
         <NButton quaternary @click="toggleBatchMode">
           <template #icon>
             <Icon
@@ -586,54 +676,10 @@ async function handleImport() {
           </template>
           {{ batchMode ? "取消批量" : "批量操作" }}
         </NButton>
-        <!-- P3-6：导入导出按钮 -->
-        <NButton quaternary type="info" @click="handleExport">
-          <template #icon><Icon icon="mdi:download" /></template>
-          导出
-        </NButton>
-        <NButton quaternary type="info" @click="showImportModal = true">
-          <template #icon><Icon icon="mdi:upload" /></template>
-          导入
-        </NButton>
       </NSpace>
       <div class="mt-2 text-xs text-gray-500">
         共 {{ filteredCustomList.length + filteredPresetList.length }} 条文案
       </div>
-    </NCard>
-
-    <!-- P1-5：批量操作工具栏 -->
-    <NCard v-if="batchMode" :bordered="false" class="!bg-blue-50">
-      <NSpace align="center" justify="space-between">
-        <NSpace>
-          <span class="text-sm">已选择 {{ selectedIds.size }} 条</span>
-          <NSelect
-            v-model:value="batchLevel"
-            :options="levelOptions"
-            style="width: 150px"
-            placeholder="选择等级"
-          />
-          <NButton
-            :disabled="selectedIds.size === 0"
-            :loading="batchDeleting"
-            @click="handleBatchUpdateLevel"
-          >
-            批量改等级
-          </NButton>
-          <NPopconfirm @positive-click="handleBatchDelete">
-            <template #trigger>
-              <NButton
-                :disabled="selectedIds.size === 0"
-                :loading="batchDeleting"
-                type="error"
-              >
-                批量删除
-              </NButton>
-            </template>
-            确定删除选中的 {{ selectedIds.size }} 条文案吗？预设文案不会被删除。
-          </NPopconfirm>
-        </NSpace>
-        <NButton quaternary @click="toggleBatchMode">取消</NButton>
-      </NSpace>
     </NCard>
 
     <!-- 按等级展示鼓励语 -->
@@ -672,11 +718,27 @@ async function handleImport() {
             v-for="item in [...presetByLevel[level], ...customByLevel[level]]"
             :key="item.id"
             class="p-3 rounded border text-sm flex items-start gap-2"
-            :class="{
-              'border-blue-100 bg-blue-50/50': item.category === 'preset',
-              'border-green-100 bg-green-50/50': item.category === 'custom',
-            }"
+            :class="[
+              item.category === 'preset'
+                ? 'enc-item-preset'
+                : 'enc-item-custom',
+              getDragClass(item),
+            ]"
+            draggable="true"
+            @dragstart="handleDragStart(item, $event)"
+            @dragend="handleDragEnd"
+            @dragover="handleDragOver(item, $event)"
+            @dragleave="handleDragLeave"
+            @drop="handleDrop(item, $event)"
+            @dragenter.prevent
           >
+            <!-- P3-5：拖拽手柄 -->
+            <Icon
+              icon="mdi:drag-vertical"
+              width="16"
+              class="enc-drag-handle mt-0.5"
+              title="拖拽排序"
+            />
             <!-- P1-5：批量选择 checkbox -->
             <NCheckbox
               v-if="batchMode && item.category === 'custom'"
@@ -696,55 +758,30 @@ async function handleImport() {
             >
               {{ item.category === "preset" ? "预设" : "自定义" }}
             </NTag>
+            <!-- P2-6：复制按钮 -->
+            <NButton
+              size="tiny"
+              quaternary
+              type="default"
+              :disabled="batchMode"
+              @click="handleCopy(item)"
+            >
+              <Icon icon="mdi:content-copy" width="14" />
+            </NButton>
             <!-- P3-2：收藏按钮 -->
             <NButton
               size="tiny"
               quaternary
-              :type="store.isFavorite(item.id) ? 'warning' : 'default'"
-              @click="toggleFavorite(item)"
+              :type="store.isFavorited(item.id) ? 'error' : 'default'"
+              :disabled="batchMode"
+              @click="handleToggleFavorite(item)"
             >
               <Icon
                 :icon="
-                  store.isFavorite(item.id) ? 'mdi:star' : 'mdi:star-outline'
+                  store.isFavorited(item.id) ? 'mdi:heart' : 'mdi:heart-outline'
                 "
                 width="14"
               />
-            </NButton>
-            <!-- P3-3：反馈按钮 -->
-            <NButton
-              size="tiny"
-              quaternary
-              type="success"
-              @click="handleFeedback(item, 'like')"
-            >
-              <Icon icon="mdi:thumb-up-outline" width="14" />
-            </NButton>
-            <NButton
-              size="tiny"
-              quaternary
-              type="error"
-              @click="handleFeedback(item, 'dislike')"
-            >
-              <Icon icon="mdi:thumb-down-outline" width="14" />
-            </NButton>
-            <!-- P3-5：排序按钮（仅自定义文案） -->
-            <NButton
-              v-if="item.category === 'custom'"
-              size="tiny"
-              quaternary
-              :disabled="batchMode"
-              @click="moveUp(item, level)"
-            >
-              <Icon icon="mdi:chevron-up" width="14" />
-            </NButton>
-            <NButton
-              v-if="item.category === 'custom'"
-              size="tiny"
-              quaternary
-              :disabled="batchMode"
-              @click="moveDown(item, level)"
-            >
-              <Icon icon="mdi:chevron-down" width="14" />
             </NButton>
             <!-- P0-5：编辑按钮（仅自定义文案） -->
             <NButton
@@ -802,10 +839,12 @@ async function handleImport() {
           v-for="item in [...filteredPresetList, ...filteredCustomList]"
           :key="item.id"
           class="p-3 rounded border text-sm flex items-start gap-2"
-          :class="{
-            'border-blue-100 bg-blue-50/50': item.category === 'preset',
-            'border-green-100 bg-green-50/50': item.category === 'custom',
-          }"
+          :class="[
+            {
+              'border-blue-100 bg-blue-50/50': item.category === 'preset',
+              'border-green-100 bg-green-50/50': item.category === 'custom',
+            },
+          ]"
         >
           <!-- P1-5：批量选择 checkbox -->
           <NCheckbox
@@ -833,37 +872,6 @@ async function handleImport() {
           >
             {{ LEVEL_META[item.level].label }}
           </NTag>
-          <!-- P3-2：收藏按钮 -->
-          <NButton
-            size="tiny"
-            quaternary
-            :type="store.isFavorite(item.id) ? 'warning' : 'default'"
-            @click="toggleFavorite(item)"
-          >
-            <Icon
-              :icon="
-                store.isFavorite(item.id) ? 'mdi:star' : 'mdi:star-outline'
-              "
-              width="14"
-            />
-          </NButton>
-          <!-- P3-3：反馈按钮 -->
-          <NButton
-            size="tiny"
-            quaternary
-            type="success"
-            @click="handleFeedback(item, 'like')"
-          >
-            <Icon icon="mdi:thumb-up-outline" width="14" />
-          </NButton>
-          <NButton
-            size="tiny"
-            quaternary
-            type="error"
-            @click="handleFeedback(item, 'dislike')"
-          >
-            <Icon icon="mdi:thumb-down-outline" width="14" />
-          </NButton>
           <!-- P0-5：编辑按钮 -->
           <NButton
             v-if="item.category === 'custom'"
@@ -937,37 +945,101 @@ async function handleImport() {
         </NSpace>
       </template>
     </NModal>
-
-    <!-- P3-6：导入鼓励语弹窗 -->
-    <NModal
-      v-model:show="showImportModal"
-      preset="card"
-      title="导入鼓励语"
-      style="width: 500px"
-    >
-      <NForm label-placement="top">
-        <NFormItem label="JSON 内容">
-          <NInput
-            v-model:value="importJson"
-            type="textarea"
-            :autosize="{ minRows: 6, maxRows: 12 }"
-            placeholder="粘贴从导出功能生成的 JSON 内容"
-          />
-        </NFormItem>
-      </NForm>
-      <div class="text-xs text-gray-500 mb-3">
-        支持导入鼓励语 JSON 文件，重复文案会自动跳过
-      </div>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton :disabled="importing" @click="showImportModal = false">
-            取消
-          </NButton>
-          <NButton type="primary" :loading="importing" @click="handleImport">
-            导入
-          </NButton>
-        </NSpace>
-      </template>
-    </NModal>
   </div>
 </template>
+
+<style scoped>
+/* ========== 鼓励语拖拽视觉反馈 ========== */
+
+/* ---- 列表项基础样式 ---- */
+.enc-item-preset {
+  border-color: #dbeafe;
+  background-color: rgba(239, 246, 255, 0.5);
+}
+
+.enc-item-custom {
+  border-color: #dcfce7;
+  background-color: rgba(240, 253, 244, 0.5);
+}
+
+/* ---- 拖拽源：半透明 + 缩小 ---- */
+.enc-dragging {
+  opacity: 0.35;
+  transform: scale(0.97);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* ---- 悬停目标：背景高亮 ---- */
+.enc-drag-over {
+  background-color: rgba(238, 246, 255, 0.7) !important;
+  border-color: #bcd9ff !important;
+}
+
+/* ---- 插入指示线（上方/下方） ---- */
+.enc-drop-before {
+  box-shadow: 0 -3px 0 0 #599dff;
+  transition:
+    box-shadow 0.1s ease,
+    background-color 0.1s ease;
+}
+
+.enc-drop-after {
+  box-shadow: 0 3px 0 0 #599dff;
+  transition:
+    box-shadow 0.1s ease,
+    background-color 0.1s ease;
+}
+
+/* ---- 放置后确认闪烁 ---- */
+.enc-dropped {
+  animation: enc-drop-confirm 0.8s ease;
+}
+
+@keyframes enc-drop-confirm {
+  0% {
+    background-color: rgba(217, 234, 255, 0.9);
+    box-shadow: 0 0 0 2px #599dff;
+  }
+  40% {
+    background-color: rgba(217, 234, 255, 0.6);
+    box-shadow: 0 0 0 2px #599dff;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+/* ---- 拖拽手柄 ---- */
+.enc-drag-handle {
+  color: #d1d5db;
+  cursor: grab;
+  transition:
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.enc-drag-handle:hover {
+  color: #599dff;
+  transform: scale(1.2);
+}
+
+.enc-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ---- 行容器过渡基础 ---- */
+[draggable="true"] {
+  user-select: none;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.1s ease;
+}
+
+[draggable="true"]:active {
+  cursor: grabbing;
+}
+</style>

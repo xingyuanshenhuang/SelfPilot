@@ -22,6 +22,7 @@ import { useTaskStore } from "@/stores/taskStore";
 import { useEncouragementStore } from "@/stores/encouragementStore";
 import CelebrationModal from "@/components/CelebrationModal.vue";
 import { getCelebrationAchievement } from "@/api/stats";
+import { logEncouragementClose } from "@/api/encouragement";
 import type { CelebrationAchievement } from "@/types";
 
 const activeView = ref<string>("dashboard");
@@ -111,10 +112,16 @@ const showEncouragementModal = ref(false);
 const showCelebrationModal = ref(false);
 const celebrationAchievement = ref<CelebrationAchievement | null>(null);
 
+// P3-3：记录弹窗打开时间
+const modalOpenTime = ref<number>(0);
+
 watch(
   () => taskStore.pendingEncouragement,
   async (enc) => {
     if (!enc) return;
+
+    // P3-3：记录打开时间
+    modalOpenTime.value = Date.now();
 
     if (taskStore.isCelebration) {
       // P1-3：全部目标完成，显示庆祝弹窗
@@ -138,13 +145,35 @@ watch(
   },
 );
 
-function closeEncouragementModal() {
+async function closeEncouragementModal() {
   showEncouragementModal.value = false;
+
+  // P3-3：记录关闭行为
+  if (taskStore.pendingEncouragement) {
+    const viewDuration = Math.floor((Date.now() - modalOpenTime.value) / 1000);
+    try {
+      await logEncouragementClose(taskStore.pendingEncouragement.id, viewDuration);
+    } catch (e) {
+      console.warn("记录关闭行为失败:", e);
+    }
+  }
+
   taskStore.clearPendingEncouragement();
 }
 
-function closeCelebrationModal() {
+async function closeCelebrationModal() {
   showCelebrationModal.value = false;
+
+  // P3-3：记录关闭行为
+  if (taskStore.pendingEncouragement) {
+    const viewDuration = Math.floor((Date.now() - modalOpenTime.value) / 1000);
+    try {
+      await logEncouragementClose(taskStore.pendingEncouragement.id, viewDuration);
+    } catch (e) {
+      console.warn("记录关闭行为失败:", e);
+    }
+  }
+
   taskStore.clearPendingEncouragement();
 }
 

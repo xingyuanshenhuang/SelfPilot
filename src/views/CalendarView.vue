@@ -105,6 +105,10 @@ function syncFocusedDay() {
 // 批量操作选中
 const selectedTaskIds = ref<Set<string>>(new Set());
 
+// P2-3：拖拽改期状态
+const draggedTask = ref<CalendarTask | null>(null);
+const dragOverDay = ref<Date | null>(null);
+
 // P2-1：筛选条件
 const filterGoalIds = ref<string[]>([]);
 const filterStatuses = ref<TaskStatus[]>([]);
@@ -330,6 +334,109 @@ async function submitCreateDialog() {
       createDialogTriggerRef.value?.focus();
     },
   });
+}
+
+// ===== P2-3：拖拽改期 =====
+
+/** 拖拽开始：记录任务，设置视觉反馈 */
+function handleDragStart(e: DragEvent, task: CalendarTask) {
+  draggedTask.value = task;
+
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", task.id);
+
+    // 创建自定义拖拽预览
+    const dragImage = document.createElement("div");
+    dragImage.textContent = task.name;
+    dragImage.className = "drag-preview";
+    dragImage.style.cssText = `
+      position: absolute;
+      top: -1000px;
+      background: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      white-space: nowrap;
+    `;
+    document.body.appendChild(dragImage);
+    e.dataTransfer.setDragImage(dragImage, 0, 0);
+    setTimeout(() => document.body.removeChild(dragImage), 0);
+  }
+
+  // 源元素视觉反馈
+  const target = e.target as HTMLElement;
+  target.classList.add("opacity-40");
+}
+
+/** 拖拽结束：清理状态 */
+function handleDragEnd(e: DragEvent) {
+  draggedTask.value = null;
+  dragOverDay.value = null;
+
+  // 移除源元素视觉反馈
+  const target = e.target as HTMLElement;
+  target.classList.remove("opacity-40");
+}
+
+/** 拖拽悬停在日期单元格上 */
+function handleDragOver(e: DragEvent, day: Date) {
+  e.preventDefault();
+
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  dragOverDay.value = day;
+}
+
+/** 拖拽离开日期单元格 */
+function handleDragLeave(day: Date) {
+  if (dragOverDay.value && isSameDay(day, dragOverDay.value)) {
+    dragOverDay.value = null;
+  }
+}
+
+/** 放置任务到新日期 */
+async function handleDrop(e: DragEvent, targetDay: Date) {
+  e.preventDefault();
+  dragOverDay.value = null;
+
+  if (!draggedTask.value) return;
+
+  const oldDate = draggedTask.value.plan_date || "";
+  const newDate = format(targetDay, "yyyy-MM-dd");
+
+  // 检查是否移动到不同日期
+  if (oldDate === newDate) {
+    draggedTask.value = null;
+    return; // 同一天，不触发移动
+  }
+
+  try {
+    // 调用API更新任务计划日期
+    const updated = await taskApi.updateTask({
+      task_id: draggedTask.value.id,
+      plan_date: newDate,
+    });
+
+    message.success(`任务已从 ${oldDate} 移至 ${newDate}`);
+
+    // 刷新数据
+    await loadData();
+    await goalStore.refreshProgressForGoalChain(updated.goal_id);
+  } catch (err) {
+    console.error("拖拽改期失败:", err);
+    message.error("改期失败，请重试");
+  } finally {
+    draggedTask.value = null;
+  }
+}
+
+/** 判断日期单元格是否为当前拖拽目标 */
+function isDragTarget(day: Date): boolean {
+  return dragOverDay.value ? isSameDay(day, dragOverDay.value) : false;
 }
 
 const weekDays = ["一", "二", "三", "四", "五", "六", "日"];
@@ -1297,6 +1404,8 @@ function getTaskAriaLabel(t: CalendarTask): string {
                     !isToday(day) &&
                     !isMonthCellFocusable(day) &&
                     getLoadLevel(day) === 'extreme',
+                  // P2-3：拖拽目标高亮
+                  'ring-2 ring-brand-500 bg-brand-50': isDragTarget(day),
                 }"
                 @click="selectDay(day)"
                 @dblclick.stop="
@@ -1306,6 +1415,9 @@ function getTaskAriaLabel(t: CalendarTask): string {
                   )
                 "
                 @keydown="onMonthCellKeydown($event)"
+                @dragover.prevent="handleDragOver($event, day)"
+                @dragleave="handleDragLeave(day)"
+                @drop="handleDrop($event, day)"
               >
                 <div
                   class="text-center text-sm font-semibold"
@@ -1383,10 +1495,14 @@ function getTaskAriaLabel(t: CalendarTask): string {
                     <div
                       v-for="t in getTasksOfDay(day).slice(0, 4)"
                       :key="t.id"
-                      class="w-1.5 h-1.5 rounded-full"
+                      class="w-1.5 h-1.5 rounded-full cursor-move transition-opacity"
                       :class="{ 'opacity-50': t.status === 'skipped' }"
                       :style="{ backgroundColor: STATUS_META[t.status].color }"
                       :title="t.name"
+                      draggable="true"
+                      :aria-label="`拖拽任务：${t.name}`"
+                      @dragstart="handleDragStart($event, t)"
+                      @dragend="handleDragEnd($event)"
                     />
                     <span
                       v-if="getTasksOfDay(day).length > 4"

@@ -8,7 +8,6 @@ import type {
   EncouragementSettings,
   UpdateEncouragementSettingsInput,
   SetbackSituation,
-  UserFavorite,
 } from "@/types";
 
 /** 列出所有鼓励语 */
@@ -45,14 +44,9 @@ export async function randomEncouragement(
 /** 根据连续天数智能选择鼓励语等级（1天普通/3天进阶/7天高亮） */
 export async function randomEncouragementByStreak(
   streak: number,
-  longestStreak: number,
   triggerSource: EncouragementTriggerSource,
 ): Promise<Encouragement | null> {
-  return invoke("random_encouragement_by_streak", {
-    streak,
-    longestStreak,
-    triggerSource,
-  });
+  return invoke("random_encouragement_by_streak", { streak, triggerSource });
 }
 
 /** 抽取庆祝鼓励语（全部目标完成时使用） */
@@ -117,77 +111,83 @@ export async function resetHiddenPresets(): Promise<number> {
 // P3-2: 用户收藏机制
 // ============================================================
 
-/** 添加收藏 */
-export async function addFavorite(
-  encouragementId: string,
-): Promise<UserFavorite> {
-  return invoke("add_favorite", { encouragementId });
+/** 切换收藏状态（已收藏则取消，未收藏则添加） */
+export async function toggleFavorite(id: string): Promise<boolean> {
+  return invoke("toggle_favorite", { id });
 }
 
-/** 移除收藏 */
-export async function removeFavorite(encouragementId: string): Promise<void> {
-  return invoke("remove_favorite", { encouragementId });
+/** 获取收藏的鼓励语列表 */
+export async function getFavorites(): Promise<Encouragement[]> {
+  return invoke("get_favorites");
 }
 
-/** 列出所有收藏 */
-export async function listFavorites(): Promise<UserFavorite[]> {
-  return invoke("list_favorites");
+/** 检查鼓励语是否已收藏 */
+export async function isFavorite(id: string): Promise<boolean> {
+  return invoke("is_favorite", { id });
 }
 
 // ============================================================
 // P3-3: 展示反馈学习
 // ============================================================
 
-/** 记录反馈 */
-export async function recordFeedback(
-  encouragementId: string,
-  feedbackType: "like" | "dislike",
-): Promise<void> {
-  return invoke("record_feedback", { encouragementId, feedbackType });
-}
-
-/** 获取反馈统计 */
-export async function getFeedbackStats(): Promise<
-  Record<string, { likes: number; dislikes: number }>
-> {
-  return invoke("get_feedback_stats");
-}
-
-// ============================================================
-// P3-5: 拖拽排序
-// ============================================================
-
-/** 更新鼓励语排序 */
-export async function updateEncouragementOrder(
+/** 记录用户关闭鼓励语弹窗的行为 */
+export async function logEncouragementClose(
   id: string,
-  sortOrder: number,
+  viewDuration: number,
 ): Promise<void> {
-  return invoke("update_encouragement_order", { id, sortOrder });
+  return invoke("log_encouragement_close", { id, viewDuration });
 }
 
-/** 批量更新排序 */
-export async function batchUpdateEncouragementOrder(
-  orders: Array<[string, number]>,
-): Promise<void> {
-  return invoke("batch_update_encouragement_order", { orders });
+/** 鼓励语展示统计 */
+export interface EncouragementStats {
+  total_shows: number;
+  avg_duration: number;
+  last_shown: string | null;
+}
+
+/** 获取鼓励语展示统计 */
+export async function getEncouragementStats(
+  id: string,
+): Promise<EncouragementStats> {
+  return invoke("get_encouragement_stats", { id });
 }
 
 // ============================================================
-// P3-6：独立导入导出
+// P3-4: longest_streak 信号利用
 // ============================================================
 
-/** 导出鼓励语（JSON格式） */
-export async function exportEncouragements(): Promise<string> {
-  return invoke("export_encouragements");
+/** 连续天数里程碑信息 */
+export interface StreakMilestone {
+  milestone_type: string;
+  current_streak: number;
+  longest_streak: number;
 }
 
-/** 导入鼓励语（JSON格式） */
-export async function importEncouragements(
-  json: string,
-): Promise<{ imported: number; skipped: number }> {
-  const [imported, skipped] = await invoke<[number, number]>(
-    "import_encouragements",
-    { json },
-  );
-  return { imported, skipped };
+/** 检测是否接近/超越历史最长连续天数 */
+export async function checkLongestStreakMilestone(): Promise<StreakMilestone | null> {
+  return invoke("check_longest_streak_milestone");
+}
+
+/** 抽取 longest_streak 触发的鼓励语 */
+export async function randomLongestStreakEncouragement(
+  triggerSource: EncouragementTriggerSource,
+): Promise<Encouragement | null> {
+  return invoke("random_longest_streak_encouragement", { triggerSource });
+}
+
+// ============================================================
+// P3-5: 拖拽排序与自定义顺序
+// ============================================================
+
+/** 排序项 */
+export interface EncouragementOrderItem {
+  id: string;
+  sort_order: number;
+}
+
+/** 更新鼓励语排序顺序（批量） */
+export async function updateEncouragementOrder(
+  items: EncouragementOrderItem[],
+): Promise<void> {
+  return invoke("update_encouragement_order", { items });
 }

@@ -61,16 +61,28 @@ export const useTaskStore = defineStore("task", () => {
             isCelebration.value = true;
           }
         } else {
-          // 根据连续天数选择等级鼓励语（P3-4：传入 longest_streak）
-          const streakInfo = await encApi.getStreak();
-          const enc = await encApi.randomEncouragementByStreak(
-            streakInfo.current_streak,
-            streakInfo.longest_streak,
-            "complete_first",
-          );
-          if (enc) {
-            pendingEncouragement.value = enc;
-            isCelebration.value = false;
+          // P3-4：检测是否接近/超越历史最长连续天数
+          const milestone = await encApi.checkLongestStreakMilestone();
+
+          if (milestone) {
+            // 接近/超越历史记录 → longest_streak 鼓励语
+            const enc =
+              await encApi.randomLongestStreakEncouragement("complete_first");
+            if (enc) {
+              pendingEncouragement.value = enc;
+              isCelebration.value = false;
+            }
+          } else {
+            // 根据连续天数选择等级鼓励语
+            const streakInfo = await encApi.getStreak();
+            const enc = await encApi.randomEncouragementByStreak(
+              streakInfo.current_streak,
+              "complete_first",
+            );
+            if (enc) {
+              pendingEncouragement.value = enc;
+              isCelebration.value = false;
+            }
           }
         }
       } catch {
