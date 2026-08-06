@@ -536,6 +536,23 @@ export interface SetTaskDependencyInput {
   depends_on_id: string;
 }
 
+/** 跳过任务后的处理模式 */
+export type SkipBehaviorMode =
+  | "mark_skipped" // 模式A：标记未完成，允许补完成，不重新计算
+  | "redistribute" // 模式B：自动重新将剩余任务量平均分摊到剩余天数
+  | "auto_extend_deadline"; // 模式C：逾期时自动延后目标完成日期
+
+/** 行为设置（跳过/逾期处理方式） */
+export interface BehaviorSettings {
+  /** 跳过任务后的处理模式 */
+  skip_behavior: SkipBehaviorMode;
+}
+
+/** 更新行为设置输入 */
+export interface UpdateBehaviorSettingsInput {
+  skip_behavior?: SkipBehaviorMode;
+}
+
 /** 删除任务结果（P2-3：返回被删任务所属 goal_id，供前端局部更新进度） */
 export interface DeleteTaskResult {
   task_id: string;

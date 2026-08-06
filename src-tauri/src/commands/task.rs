@@ -7,7 +7,7 @@ use crate::db::models::{
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
-use crate::services::dependency_service;
+use crate::services::{dependency_service, split_service};
 
 /// 手动创建任务
 #[tauri::command]
@@ -115,10 +115,13 @@ pub async fn complete_task(
 
 /// 跳过任务
 ///
-/// PRD §4.2 模块二：标记为"已跳过"，不计入完成，不影响后续计划
+/// 根据行为设置执行不同的后续操作：
+/// - mark_skipped（默认）：仅标记为跳过，不触发后续动作
+/// - redistribute：自动将剩余任务量重新分摊到剩余天数
+/// - auto_extend_deadline：若目标已逾期，自动延展目标截止日期
 #[tauri::command]
 pub async fn skip_task(task_id: String, state: State<'_, DbPool>) -> AppResult<Task> {
-    let _task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
+    let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&task_id)
         .fetch_optional(&state.0)
         .await?
@@ -134,7 +137,139 @@ pub async fn skip_task(task_id: String, state: State<'_, DbPool>) -> AppResult<T
         .fetch_one(&state.0)
         .await?;
 
+    let behavior = get_skip_behavior(&state.0).await;
+
+    match behavior.as_str() {
+        "redistribute" => {
+            if let Err(e) = redistribute_after_skip(&state.0, &task.goal_id).await {
+                eprintln!("[skip_task] 模式B自动重新分摊失败: {}", e);
+            }
+        }
+        "auto_extend_deadline" => {
+            if let Err(e) = auto_extend_deadline_after_skip(&state.0, &task.goal_id).await {
+                eprintln!("[skip_task] 模式C自动延后截止日期失败: {}", e);
+            }
+        }
+        _ => {}
+    }
+
     Ok(updated)
+}
+
+/// 读取跳过行为设置（默认 mark_skipped）
+async fn get_skip_behavior(pool: &sqlx::SqlitePool) -> String {
+    sqlx::query_scalar("SELECT value FROM settings WHERE key = 'skip_behavior'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "mark_skipped".to_string())
+}
+
+/// 模式B：跳过后自动重新分摊剩余任务量
+///
+/// 复用 split_service::build_replan_preview 的逻辑，
+/// 将跳过任务的计划量重新分配给剩余未完成任务。
+async fn redistribute_after_skip(pool: &sqlx::SqlitePool, goal_id: &str) -> AppResult<()> {
+    let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(goal_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+
+    // 无截止日期时无法重新规划
+    if goal.deadline.is_none() {
+        return Ok(());
+    }
+
+    let unfinished: Vec<Task> = sqlx::query_as(
+        "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY sort_order",
+    )
+    .bind(goal_id)
+    .fetch_all(pool)
+    .await?;
+
+    if unfinished.is_empty() {
+        return Ok(());
+    }
+
+    let today = chrono::Local::now().date_naive();
+    let dep_map = dependency_service::load_goal_dependency_map(pool, goal_id).await?;
+    let preview = split_service::build_replan_preview(&goal, &unfinished, today, &dep_map)?;
+
+    for item in &preview.items {
+        if item.retained {
+            continue;
+        }
+        sqlx::query("UPDATE tasks SET plan_qty = ? WHERE id = ?")
+            .bind(item.new_plan_qty)
+            .bind(&item.task_id)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// 模式C：跳过后若目标逾期则自动延展截止日期
+///
+/// 当目标截止日期已过期时，根据剩余未完成任务数量自动推算新的截止日期。
+/// 新截止日期 = max(剩余任务中最大plan_date, today + 剩余任务数)
+async fn auto_extend_deadline_after_skip(pool: &sqlx::SqlitePool, goal_id: &str) -> AppResult<()> {
+    let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(goal_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+
+    let deadline_str = match &goal.deadline {
+        Some(d) => d.clone(),
+        None => return Ok(()),
+    };
+
+    let deadline = chrono::NaiveDate::parse_from_str(&deadline_str, "%Y-%m-%d")
+        .map_err(|e| AppError::Param(format!("截止日期格式错误: {}", e)))?;
+
+    let today = chrono::Local::now().date_naive();
+
+    // 仅在目标已逾期时才自动延展
+    if deadline >= today {
+        return Ok(());
+    }
+
+    let unfinished: Vec<Task> = sqlx::query_as(
+        "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY plan_date",
+    )
+    .bind(goal_id)
+    .fetch_all(pool)
+    .await?;
+
+    if unfinished.is_empty() {
+        return Ok(());
+    }
+
+    let remaining_tasks = unfinished.len() as i64;
+
+    // 找到剩余任务中的最大 plan_date
+    let max_plan_date = unfinished
+        .iter()
+        .filter_map(|t| t.plan_date.as_ref())
+        .filter_map(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .max();
+
+    let today_plus_buffer = today + chrono::Duration::days(remaining_tasks);
+    let new_deadline = match max_plan_date {
+        Some(max_date) => max_date.max(today_plus_buffer),
+        None => today_plus_buffer,
+    };
+
+    sqlx::query("UPDATE goals SET deadline = ? WHERE id = ?")
+        .bind(new_deadline.format("%Y-%m-%d").to_string())
+        .bind(goal_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 /// 列出今日待办任务（今日计划任务，不含跳过）

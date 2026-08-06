@@ -21,7 +21,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { useSettingStore } from "@/stores/settingStore";
 import { useEncouragementStore } from "@/stores/encouragementStore";
 import * as backupApi from "@/api/backup";
-import type { ImportConflictMode, ImportResult } from "@/types";
+import type { ImportConflictMode, ImportResult, SkipBehaviorMode } from "@/types";
 
 const settingStore = useSettingStore();
 const encStore = useEncouragementStore();
@@ -67,6 +67,24 @@ const styleOptions = [
   { label: "温暖鼓励", value: "warm" },
   { label: "专业理性", value: "professional" },
   { label: "极简克制", value: "minimal" },
+];
+
+const skipBehaviorOptions: { label: string; value: SkipBehaviorMode; desc: string }[] = [
+  {
+    label: "模式 A：仅标记跳过",
+    value: "mark_skipped",
+    desc: "将任务标记为已跳过，允许后续补完成，不自动重新计算剩余任务",
+  },
+  {
+    label: "模式 B：自动重新分摊",
+    value: "redistribute",
+    desc: "跳过后自动触发重新规划，将剩余任务量平均分摊到剩余天数",
+  },
+  {
+    label: "模式 C：自动延后截止",
+    value: "auto_extend_deadline",
+    desc: "跳过逾期任务时，自动将目标截止日期延展，避免目标处于逾期状态",
+  },
 ];
 
 onMounted(async () => {
@@ -298,6 +316,51 @@ async function handleNativeRestore() {
             深色
           </NRadioButton>
         </NRadioGroup>
+      </NSpace>
+    </NCard>
+
+    <!-- 行为设置 -->
+    <NCard :bordered="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <Icon
+            icon="mdi:gesture-tap-button-outline"
+            width="20"
+            class="text-amber-500"
+          />
+          <span>行为设置</span>
+        </div>
+      </template>
+      <NSpace vertical :size="16">
+        <!-- 跳过任务后的处理方式 -->
+        <div>
+          <div class="text-sm font-medium mb-2 flex items-center gap-1">
+            <Icon icon="mdi:skip-next-circle-outline" width="16" class="text-gray-500" />
+            跳过任务后的处理方式
+          </div>
+          <NRadioGroup
+            :value="settingStore.skipBehavior"
+            @update:value="
+              (val) =>
+                settingStore
+                  .setSkipBehavior(val as SkipBehaviorMode)
+                  .then(() => message.success('行为设置已保存'))
+            "
+          >
+            <NSpace vertical :size="10">
+              <NRadio
+                v-for="opt in skipBehaviorOptions"
+                :key="opt.value"
+                :value="opt.value"
+              >
+                <div class="flex flex-col">
+                  <span class="font-medium">{{ opt.label }}</span>
+                  <span class="text-xs text-gray-500 ml-0">{{ opt.desc }}</span>
+                </div>
+              </NRadio>
+            </NSpace>
+          </NRadioGroup>
+        </div>
       </NSpace>
     </NCard>
 
