@@ -172,9 +172,9 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     if input.name.is_some() {
         updates.push("name = ?".to_string());
     }
-    if input.deadline.is_some() {
-        updates.push("deadline = ?".to_string());
-    }
+    // deadline 始终更新：支持从有截止日期切换为"无限期"（清空为 NULL）。
+    // 前端编辑表单总是携带 deadline（字符串或 null），故始终写入即可。
+    updates.push("deadline = ?".to_string());
     if input.total_qty.is_some() {
         updates.push("total_qty = ?".to_string());
     }
@@ -194,9 +194,8 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     if let Some(name) = &input.name {
         q = q.bind(name);
     }
-    if let Some(deadline) = &input.deadline {
-        q = q.bind(deadline);
-    }
+    // deadline 可为 NULL（无限期），直接绑定 Option
+    q = q.bind(&input.deadline);
     if let Some(total_qty) = input.total_qty {
         q = q.bind(total_qty);
     }

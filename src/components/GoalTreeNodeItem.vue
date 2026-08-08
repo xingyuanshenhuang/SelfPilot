@@ -102,7 +102,7 @@ const goalIcon = computed(() =>
       : "mdi:target-variant",
 );
 const isOverdue = computed(() =>
-  getDaysLeft(props.node.goal.deadline).includes("逾期"),
+  !props.node.is_completed && getDaysLeft(props.node.goal.deadline).includes("逾期"),
 );
 
 function toggle() {
@@ -371,7 +371,14 @@ const isDraggingThisGoal = computed(
           <div
             class="text-xs text-gray-500 flex items-center gap-3 mt-0.5 flex-wrap"
           >
-            <span :class="{ 'text-red-500': isOverdue }">
+            <NTag
+              v-if="!node.goal.deadline"
+              size="tiny"
+              :bordered="false"
+            >
+              无限期
+            </NTag>
+            <span v-else :class="{ 'text-red-500': isOverdue }">
               {{ getDaysLeft(node.goal.deadline) }}
             </span>
             <span v-if="node.goal.total_qty > 0">

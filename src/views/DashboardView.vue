@@ -291,7 +291,7 @@ async function refresh() {
           <div class="flex-1 min-w-0">
             <div class="font-medium text-sm truncate">{{ goal.name }}</div>
             <div class="text-xs text-gray-500 mt-1">
-              截止：{{ goal.deadline || "未设置" }}
+              {{ goal.deadline ? `截止：${goal.deadline}` : "无限期" }}
             </div>
             <NProgress
               type="line"

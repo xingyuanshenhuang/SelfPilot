@@ -1001,7 +1001,7 @@ const replanColumns: DataTableColumns<ReplanPreview["items"][0]> = [
 
 // ===== 辅助函数 =====
 function getDaysLeft(deadline: string | null): string {
-  if (!deadline) return "未设置截止日期";
+  if (!deadline) return "无限期";
   const days = differenceInCalendarDays(parseISO(deadline), new Date());
   if (days < 0) return `已逾期 ${-days} 天`;
   if (days === 0) return "今天截止";
@@ -1259,12 +1259,24 @@ provide(goalTreeApiKey, treeApi);
           />
         </NFormItem>
         <NFormItem label="截止日期">
-          <NDatePicker
-            v-model:value="goalForm.deadline"
-            type="date"
-            clearable
-            :is-date-disabled="(ts: number) => ts < Date.now() - 86400000"
-          />
+          <div class="flex items-center gap-3 w-full">
+            <NCheckbox
+              :checked="goalForm.deadline === null"
+              @update:checked="
+                (v: boolean) => (goalForm.deadline = v ? null : Date.now())
+              "
+            >
+              无限期
+            </NCheckbox>
+            <NDatePicker
+              v-model:value="goalForm.deadline"
+              type="date"
+              clearable
+              :disabled="goalForm.deadline === null"
+              :is-date-disabled="(ts: number) => ts < Date.now() - 86400000"
+              class="flex-1"
+            />
+          </div>
         </NFormItem>
         <NSpace>
           <NFormItem label="总量（视频拆解用）">
