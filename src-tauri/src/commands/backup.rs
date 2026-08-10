@@ -1,3 +1,4 @@
+use std::io::Read;
 use tauri::{AppHandle, Manager, State};
 
 use crate::db::models::{
@@ -5,6 +6,72 @@ use crate::db::models::{
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+
+/// S-02 (SEC-H-01/SEC-M-02/SEC-M-03): 校验文件路径安全性
+///
+/// 防止路径遍历攻击：
+/// - 拒绝空路径
+/// - 拒绝包含空字节的路径（防止 null byte 注入）
+/// - 拒绝包含 `..` 的路径组件（防止目录遍历）
+/// - 当 `must_be_sqlite` 为 true 时，额外校验：
+///   - 扩展名为 .db 或 .sqlite
+///   - 文件存在且前 16 字节为 SQLite 魔术字 `SQLite format 3\0`
+fn validate_path_scope(path: &str, must_be_sqlite: bool) -> AppResult<()> {
+    // 拒绝空路径
+    if path.trim().is_empty() {
+        return Err(AppError::Param("路径不能为空".to_string()));
+    }
+
+    // 拒绝包含空字节的路径
+    if path.contains('\0') {
+        return Err(AppError::Param(
+            "路径包含非法字符（空字节）".to_string(),
+        ));
+    }
+
+    let p = std::path::Path::new(path);
+
+    // 拒绝包含 .. 的路径组件
+    for component in p.components() {
+        if component == std::path::Component::ParentDir {
+            return Err(AppError::Param(
+                "路径不能包含父目录引用 (..)".to_string(),
+            ));
+        }
+    }
+
+    if must_be_sqlite {
+        // 校验扩展名（使用 Path::extension 而非 Path::ends_with，
+        // 因为 Path::ends_with 检查的是完整路径组件，不是字符串后缀）
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "db" && ext != "sqlite" {
+            return Err(AppError::Param(
+                "文件必须以 .db 或 .sqlite 结尾".to_string(),
+            ));
+        }
+
+        // 校验文件存在
+        if !p.exists() {
+            return Err(AppError::Param(format!("文件不存在: {}", path)));
+        }
+
+        // 校验 SQLite 魔术字（前 16 字节为 "SQLite format 3\0"）
+        let mut file = std::fs::File::open(p)
+            .map_err(|e| AppError::Internal(format!("打开文件失败: {}", e)))?;
+        let mut header = [0u8; 16];
+        file.read_exact(&mut header)
+            .map_err(|e| AppError::Internal(format!("读取文件头失败: {}", e)))?;
+
+        const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+        if &header != SQLITE_MAGIC {
+            return Err(AppError::Param(
+                "文件不是有效的 SQLite 数据库".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
 
 /// 导出全部数据为 JSON 字符串
 #[tauri::command]
@@ -54,6 +121,9 @@ pub async fn export_data_to_file(
     target_path: String,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
+    // S-02: 校验路径安全性（防止路径遍历）
+    validate_path_scope(&target_path, false)?;
+
     // 验证目标路径以 .json 结尾
     if !target_path.ends_with(".json") {
         return Err(AppError::Param(
@@ -390,12 +460,24 @@ pub async fn backup_database(
     target_path: String,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
+    // S-02: 校验路径安全性（防止路径遍历）
+    validate_path_scope(&target_path, false)?;
+
     // 验证目标路径以 .db 或 .sqlite 结尾
     if !target_path.ends_with(".db") && !target_path.ends_with(".sqlite") {
         return Err(AppError::Param(
             "备份文件必须以 .db 或 .sqlite 结尾".to_string(),
         ));
     }
+
+    // S-02: 拒绝覆盖已存在的文件（VACUUM INTO 不应静默覆盖）
+    if std::path::Path::new(&target_path).exists() {
+        return Err(AppError::Param(format!(
+            "目标文件已存在，请更换路径或删除后重试: {}",
+            target_path
+        )));
+    }
+
     // VACUUM INTO 不支持参数绑定，需手动转义单引号
     let escaped = target_path.replace('\'', "''");
     sqlx::query(&format!("VACUUM INTO '{}'", escaped))
@@ -414,13 +496,8 @@ pub async fn restore_database(
     app: AppHandle,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
-    // 验证源文件存在
-    if !std::path::Path::new(&source_path).exists() {
-        return Err(AppError::Param(format!(
-            "备份文件不存在: {}",
-            source_path
-        )));
-    }
+    // S-02: 校验路径安全性 + SQLite 魔术字（防止恢复非数据库文件导致数据损坏）
+    validate_path_scope(&source_path, true)?;
 
     // 获取当前 db 路径
     let app_dir = app

@@ -3,7 +3,8 @@ mod db;
 mod error;
 mod services;
 
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::str::FromStr;
 use tauri::Manager;
 
 pub fn run() {
@@ -21,9 +22,14 @@ pub fn run() {
 
             // 初始化连接池并执行迁移
             let pool = tauri::async_runtime::block_on(async {
+                // S-03 (SEC-H-03): 启用 SQLite 外键约束，确保级联删除等数据完整性
+                let options = SqliteConnectOptions::from_str(&db_url)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
+                    .foreign_keys(true);
+
                 let pool = SqlitePoolOptions::new()
                     .max_connections(5)
-                    .connect(&db_url)
+                    .connect_with(options)
                     .await
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
