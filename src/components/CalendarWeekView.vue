@@ -11,7 +11,7 @@ import {
   NProgress,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
-import { format, isToday, isSameDay } from "date-fns";
+import { format, isToday } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
 import { STATUS_META } from "@/types";
@@ -46,20 +46,42 @@ interface WeekViewEmits {
 
 const emit = defineEmits<WeekViewEmits>();
 
-// ===== 任务统计 =====
+// ===== 任务统计（computed 缓存，避免模板中重复计算） =====
+
+interface DayStat {
+  total: number;
+  done: number;
+  partial: number;
+  overdue: number;
+  tasks: CalendarTask[];
+  completionRate: number;
+}
+
+const dayStatsMap = computed(() => {
+  const map: Record<string, DayStat> = {};
+  for (const day of props.weekGrid) {
+    const key = format(day, "yyyy-MM-dd");
+    const tasks = props.tasksByDate[key] || [];
+    const total = tasks.length;
+    const done = tasks.filter((t) => t.status === "done").length;
+    const partial = tasks.filter((t) => t.status === "partial").length;
+    const overdue = tasks.filter((t) => t.is_overdue).length;
+    const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
+    map[key] = { total, done, partial, overdue, tasks, completionRate };
+  }
+  return map;
+});
 
 function getTasksOfDay(day: Date): CalendarTask[] {
   const key = format(day, "yyyy-MM-dd");
-  return props.tasksByDate[key] || [];
+  return dayStatsMap.value[key]?.tasks || [];
 }
 
-function getDayStats(day: Date) {
-  const list = getTasksOfDay(day);
-  const total = list.length;
-  const done = list.filter((t) => t.status === "done").length;
-  const partial = list.filter((t) => t.status === "partial").length;
-  const overdue = list.filter((t) => t.is_overdue).length;
-  return { total, done, partial, overdue };
+function getDayStats(day: Date): Omit<DayStat, "tasks" | "completionRate"> {
+  const key = format(day, "yyyy-MM-dd");
+  const stat = dayStatsMap.value[key];
+  if (!stat) return { total: 0, done: 0, partial: 0, overdue: 0 };
+  return { total: stat.total, done: stat.done, partial: stat.partial, overdue: stat.overdue };
 }
 
 /** 周视图是否存在可操作任务（用于显示批量工具栏） */
@@ -69,10 +91,8 @@ const weekHasTasks = computed(() =>
 
 /** 列底部完成率 */
 function getDayCompletionRate(day: Date): number {
-  const stats = getDayStats(day);
-  const effective = stats.total;
-  if (effective === 0) return 0;
-  return Math.round((stats.done / effective) * 100);
+  const key = format(day, "yyyy-MM-dd");
+  return dayStatsMap.value[key]?.completionRate ?? 0;
 }
 
 // ===== ARIA 标签 =====
@@ -183,22 +203,23 @@ function handleBatchSkip() {
     </div>
 
     <NSpin :show="loading">
-      <div
-        class="grid grid-cols-7 gap-2"
-        role="grid"
-        aria-label="周视图日期网格"
-      >
+      <div class="overflow-x-auto">
         <div
-          v-for="day in weekGrid"
-          :key="day.toISOString()"
-          class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200"
-          role="gridcell"
-          :aria-label="getDayAriaLabel(day)"
-          :class="{
-            'border-brand-500 border-2 bg-brand-100/70 shadow-md ring-1 ring-brand-300':
-              isToday(day),
-          }"
+          class="grid grid-cols-7 gap-2 min-w-[700px]"
+          role="grid"
+          aria-label="周视图日期网格"
         >
+          <div
+            v-for="day in weekGrid"
+            :key="day.toISOString()"
+            class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200"
+            role="gridcell"
+            :aria-label="getDayAriaLabel(day)"
+            :class="{
+              'border-brand-500 border-2 bg-brand-100/70 shadow-md ring-1 ring-brand-300':
+                isToday(day),
+            }"
+          >
           <!-- 列头：日期 + 逾期标记 -->
           <div
             class="flex items-center justify-center gap-1.5 text-center text-sm font-medium pb-1.5 border-b"
@@ -334,6 +355,7 @@ function handleBatchSkip() {
               aria-hidden="true"
             />
           </div>
+        </div>
         </div>
       </div>
     </NSpin>

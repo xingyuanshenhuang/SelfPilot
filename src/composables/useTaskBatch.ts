@@ -5,6 +5,7 @@
  */
 
 import { ref } from "vue";
+import { format } from "date-fns";
 import type { CalendarTask } from "@/types";
 
 export function useTaskBatch() {
@@ -13,36 +14,48 @@ export function useTaskBatch() {
   const selectedTaskIds = ref<Set<string>>(new Set());
 
   // ===== 选择操作 =====
+  // 注意：直接调用 Set.prototype.add/delete/clear 不会可靠触发 ref 响应式更新。
+  // 这里通过创建新 Set 实例并重新赋值，确保视图能正确响应选择状态变化。
 
   function toggleSelect(taskId: string, checked: boolean) {
+    const newSet = new Set(selectedTaskIds.value);
     if (checked) {
-      selectedTaskIds.value.add(taskId);
+      newSet.add(taskId);
     } else {
-      selectedTaskIds.value.delete(taskId);
+      newSet.delete(taskId);
     }
+    selectedTaskIds.value = newSet;
   }
 
   function selectAllVisible(tasks: CalendarTask[]) {
+    const newSet = new Set(selectedTaskIds.value);
     for (const t of tasks) {
       if (t.status !== "done" && t.status !== "skipped" && !t.is_blocked) {
-        selectedTaskIds.value.add(t.id);
+        newSet.add(t.id);
       }
     }
+    selectedTaskIds.value = newSet;
   }
 
   function selectAllVisibleWeek(
     weekGrid: Date[],
     tasksByDate: Record<string, CalendarTask[]>,
   ) {
+    const newSet = new Set(selectedTaskIds.value);
     for (const day of weekGrid) {
       const key = format(day, "yyyy-MM-dd");
       const tasks = tasksByDate[key] || [];
-      selectAllVisible(tasks);
+      for (const t of tasks) {
+        if (t.status !== "done" && t.status !== "skipped" && !t.is_blocked) {
+          newSet.add(t.id);
+        }
+      }
     }
+    selectedTaskIds.value = newSet;
   }
 
   function clearSelection() {
-    selectedTaskIds.value.clear();
+    selectedTaskIds.value = new Set();
   }
 
   // ===== 批量操作 =====
@@ -126,6 +139,3 @@ export function useTaskBatch() {
     batchSkip,
   };
 }
-
-// 需要导入format函数
-import { format } from "date-fns";

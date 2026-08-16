@@ -8,6 +8,7 @@ use crate::db::models::{
     SetbackSituation, StreakInfo, UpdateEncouragementInput,
 };
 use crate::db::DbPool;
+use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use sqlx::QueryBuilder;
 
@@ -387,7 +388,7 @@ pub async fn update_encouragement(
             .bind(&input.id)
             .fetch_optional(&mut *tx)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("鼓励语 {} 不存在", input.id)))?;
+            .ok_or_else(|| helpers::not_found("鼓励语", &input.id))?;
 
     // 2. 校验非预设
     if item.category == "preset" {
@@ -447,7 +448,7 @@ pub async fn delete_encouragement(id: String, state: State<'_, DbPool>) -> AppRe
         .bind(&id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("鼓励语 {} 不存在", id)))?;
+        .ok_or_else(|| helpers::not_found("鼓励语", &id))?;
 
     if item.category == "preset" {
         return Err(AppError::Business("预设鼓励语不允许删除".into()));
@@ -605,159 +606,8 @@ pub async fn random_celebration_encouragement(
 /// 5. 遇到"无任务"的日期 → 跳过（不中断）
 #[tauri::command]
 pub async fn get_streak(state: State<'_, DbPool>) -> AppResult<StreakInfo> {
-    let today = chrono::Local::now().date_naive();
-
-    // 查询所有有任务的日期及其完成情况
-    // day_has_task: 当天是否有任务
-    // day_completed: 当天是否至少完成一个任务
-    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT plan_date,
-                COUNT(*) as task_count,
-                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_count
-         FROM tasks
-         WHERE plan_date IS NOT NULL AND status != 'skipped'
-         GROUP BY plan_date",
-    )
-    .fetch_all(&state.0)
-    .await?;
-
-    use std::collections::HashMap;
-    let mut day_map: HashMap<chrono::NaiveDate, (bool, bool)> = HashMap::new();
-    for (date_str, task_count, done_count) in rows {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-            let has_task = task_count > 0;
-            let completed = done_count > 0;
-            day_map.insert(d, (has_task, completed));
-        }
-    }
-
-    // 计算当前连续天数
-    let mut current_streak: i64 = 0;
-    // cursor 初始化为昨日（所有分支都会从昨日开始往前推）
-    let mut cursor = today - chrono::Duration::days(1);
-
-    // 今日特殊处理：若今日无任务，从昨日开始；若今日有任务但未完成，中断
-    let today_entry = day_map.get(&today);
-    let completed_today = today_entry.map(|(_, c)| *c).unwrap_or(false);
-
-    match today_entry {
-        None => {
-            // 今日无任务，从昨日开始（cursor 已是昨日）
-        }
-        Some((true, false)) => {
-            // 今日有任务但未完成 → 中断
-            current_streak = 0;
-            // cursor 已是昨日，但 today_unfinished 会跳过循环
-        }
-        Some((true, true)) => {
-            // 今日已完成
-            current_streak = 1;
-        }
-        _ => {}
-    }
-
-    // 如果今日有任务但未完成，current_streak 已为 0，跳过循环
-    let today_unfinished = matches!(today_entry, Some((true, false)));
-    if !today_unfinished {
-        // 往前推算连续天数
-        loop {
-            let entry = day_map.get(&cursor);
-            match entry {
-                None => {
-                    // 无任务日，跳过（不中断）
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, true)) => {
-                    // 有任务且完成 → 连续+1
-                    current_streak += 1;
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, false)) => {
-                    // 有任务但未完成 → 中断
-                    break;
-                }
-                _ => {
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-            }
-
-            // 防止无限循环（最多回溯 10 年）
-            if (today - cursor).num_days() > 3650 {
-                break;
-            }
-        }
-    }
-
-    // 计算 longest_streak：遍历所有有任务的日期
-    let mut longest_streak: i64 = 0;
-    let mut temp_streak: i64 = 0;
-    let mut last_date: Option<chrono::NaiveDate> = None;
-
-    let mut sorted_dates: Vec<chrono::NaiveDate> = day_map.keys().copied().collect();
-    sorted_dates.sort();
-
-    for d in &sorted_dates {
-        let (has_task, completed) = day_map[d];
-        if !has_task {
-            continue;
-        }
-        if completed {
-            // 检查与上一个日期的连续性（允许中间有无任务日）
-            let should_continue = match last_date {
-                None => true,
-                Some(last) => {
-                    // 从 last 到 d 之间，所有有任务的日期都应已完成
-                    // 简化处理：只要日期递增且中间没有"有任务但未完成"的日期
-                    let mut check = last + chrono::Duration::days(1);
-                    let mut ok = true;
-                    while check < *d {
-                        if let Some((ht, comp)) = day_map.get(&check) {
-                            if *ht && !*comp {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        check = check + chrono::Duration::days(1);
-                    }
-                    ok
-                }
-            };
-            if should_continue {
-                temp_streak += 1;
-            } else {
-                temp_streak = 1;
-            }
-            last_date = Some(*d);
-            if temp_streak > longest_streak {
-                longest_streak = temp_streak;
-            }
-        } else {
-            // 有任务但未完成 → 中断
-            temp_streak = 0;
-            last_date = Some(*d);
-        }
-    }
-
-    // 确保 longest_streak 至少等于 current_streak
-    if current_streak > longest_streak {
-        longest_streak = current_streak;
-    }
-
-    // P2-4：计算里程碑成就
-    let milestone = if longest_streak >= 30 {
-        "master".to_string()
-    } else if longest_streak >= 14 {
-        "expert".to_string()
-    } else {
-        "none".to_string()
-    };
-
-    Ok(StreakInfo {
-        current_streak,
-        longest_streak,
-        completed_today,
-        milestone,
-    })
+    // R-02：统一调用 streak_service::calc_streak，消除重复实现
+    crate::services::streak_service::calc_streak(&state.0).await
 }
 
 // ============================================================
@@ -892,94 +742,12 @@ pub async fn get_setback_situation(
     })
 }
 
-/// 内部函数：获取连续天数（复用现有 get_streak 逻辑，但不依赖 State）
+/// 内部函数：获取连续天数
+///
+/// R-02：原先这里是重复实现且 longest_streak 被错误简化为 current_streak，
+/// 现统一委托给 streak_service::calc_streak，修复了 longest_streak 隐性 bug。
 async fn get_streak_inner(pool: &sqlx::SqlitePool) -> AppResult<StreakInfo> {
-    let today = chrono::Local::now().date_naive();
-
-    // 查询所有有任务的日期及其完成情况
-    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT plan_date,
-                COUNT(*) as task_count,
-                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_count
-         FROM tasks
-         WHERE plan_date IS NOT NULL AND status != 'skipped'
-         GROUP BY plan_date",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    use std::collections::HashMap;
-    let mut day_map: HashMap<chrono::NaiveDate, (bool, bool)> = HashMap::new();
-    for (date_str, task_count, done_count) in rows {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-            let has_task = task_count > 0;
-            let completed = done_count > 0;
-            day_map.insert(d, (has_task, completed));
-        }
-    }
-
-    // 计算当前连续天数（与 get_streak 相同的逻辑）
-    let mut current_streak: i64 = 0;
-    let mut cursor = today - chrono::Duration::days(1);
-
-    let today_entry = day_map.get(&today);
-    let completed_today = today_entry.map(|(_, c)| *c).unwrap_or(false);
-
-    match today_entry {
-        None => {}
-        Some((true, false)) => {
-            current_streak = 0;
-        }
-        Some((true, true)) => {
-            current_streak = 1;
-        }
-        _ => {}
-    }
-
-    let today_unfinished = matches!(today_entry, Some((true, false)));
-    if !today_unfinished {
-        loop {
-            let entry = day_map.get(&cursor);
-            match entry {
-                None => {
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, true)) => {
-                    current_streak += 1;
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, false)) => {
-                    break;
-                }
-                _ => {
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-            }
-
-            if (today - cursor).num_days() > 3650 {
-                break;
-            }
-        }
-    }
-
-    // 计算 longest_streak（简化：使用 current_streak）
-    let longest_streak = current_streak;
-
-    // P2-4：计算里程碑成就
-    let milestone = if longest_streak >= 30 {
-        "master".to_string()
-    } else if longest_streak >= 14 {
-        "expert".to_string()
-    } else {
-        "none".to_string()
-    };
-
-    Ok(StreakInfo {
-        current_streak,
-        longest_streak,
-        completed_today,
-        milestone,
-    })
+    crate::services::streak_service::calc_streak(pool).await
 }
 
 /// 内部函数：获取今日是否有任务

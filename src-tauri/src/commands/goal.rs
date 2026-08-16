@@ -7,6 +7,7 @@ use crate::db::models::{
     RepeatSplitInput, SmartSplitInput, Task, UpdateGoalInput,
 };
 use crate::db::DbPool;
+use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use crate::services::{dependency_service, progress_service, split_service};
 
@@ -28,7 +29,7 @@ pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> Ap
                 .bind(parent_id)
                 .fetch_optional(&state.0)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("父目标 {} 不存在", parent_id)))?;
+                .ok_or_else(|| helpers::not_found("父目标", &parent_id))?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM goals WHERE parent_id = ?")
                     .bind(parent_id)
@@ -161,7 +162,7 @@ pub async fn get_goal(id: String, state: State<'_, DbPool>) -> AppResult<Goal> {
         .bind(&id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &id))?;
     Ok(goal)
 }
 
@@ -280,7 +281,7 @@ pub async fn auto_split(goal_id: String, state: State<'_, DbPool>) -> AppResult<
         .bind(&goal_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &goal_id))?;
 
     // 检查是否已有自动拆解任务，避免重复
     let existing: i64 =
@@ -346,7 +347,7 @@ pub async fn split_by_capacity(goal_id: String, state: State<'_, DbPool>) -> App
         .bind(&goal_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &goal_id))?;
 
     // 检查是否已有自动拆解任务，避免重复
     let existing: i64 =
@@ -408,7 +409,7 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(&input.goal_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &input.goal_id))?;
 
     let today = chrono::Local::now().date_naive();
     let tasks = split_service::split_repeat_tasks(&goal, &input, today)?;
@@ -455,7 +456,7 @@ pub async fn smart_split(input: SmartSplitInput, state: State<'_, DbPool>) -> Ap
         .bind(&input.goal_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &input.goal_id))?;
 
     // 检查是否已有自动拆解任务，避免重复
     let existing: i64 =
@@ -512,7 +513,7 @@ pub async fn replan_preview(goal_id: String, state: State<'_, DbPool>) -> AppRes
         .bind(&goal_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &goal_id))?;
 
     let unfinished: Vec<Task> = sqlx::query_as(
         "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY sort_order",
@@ -539,7 +540,7 @@ pub async fn replan_goal(goal_id: String, state: State<'_, DbPool>) -> AppResult
         .bind(&goal_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &goal_id))?;
 
     let unfinished: Vec<Task> = sqlx::query_as(
         "SELECT * FROM tasks WHERE goal_id = ? AND status IN ('pending', 'partial') ORDER BY sort_order",
@@ -595,7 +596,7 @@ pub async fn move_goal(input: MoveGoalInput, state: State<'_, DbPool>) -> AppRes
         .bind(&input.goal_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", input.goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", &input.goal_id))?;
 
     // 不允许移动到自身
     if let Some(ref pid) = input.new_parent_id {
@@ -622,7 +623,7 @@ pub async fn move_goal(input: MoveGoalInput, state: State<'_, DbPool>) -> AppRes
             .bind(pid)
             .fetch_optional(&state.0)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("父目标 {} 不存在", pid)))?;
+            .ok_or_else(|| helpers::not_found("父目标", &pid))?;
     }
 
     // 计算新 path
@@ -643,7 +644,7 @@ pub async fn move_goal(input: MoveGoalInput, state: State<'_, DbPool>) -> AppRes
             .bind(before_id)
             .fetch_optional(&state.0)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("前置目标 {} 不存在", before_id)))?;
+            .ok_or_else(|| helpers::not_found("前置目标", &before_id))?;
         // 校验：前置目标必须与新目标同级（同一 parent_id）
         if before.parent_id != input.new_parent_id {
             return Err(AppError::Param(

@@ -13,6 +13,7 @@ import {
   subWeeks,
   addDays,
   subDays,
+  getISOWeek,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 
@@ -68,7 +69,10 @@ export function useCalendarNavigation(initialMode: ViewMode = "month") {
     if (viewMode.value === "month") {
       return format(currentDate.value, "yyyy 年 M 月", { locale: zhCN });
     } else if (viewMode.value === "week") {
-      return format(currentDate.value, "yyyy 年 M 月 第 W 周", { locale: zhCN });
+      // 用 getISOWeek 函数获取 ISO 周数，避免在含中文的 format 串中使用 W token
+      // date-fns v3 在含非 ASCII 字符的格式串中可能无法解析 W，抛出 RangeError
+      const weekNum = getISOWeek(currentDate.value);
+      return `${format(currentDate.value, "yyyy 年 M 月", { locale: zhCN })} 第 ${weekNum} 周`;
     } else {
       return format(currentDate.value, "yyyy-MM-dd EEEE", { locale: zhCN });
     }

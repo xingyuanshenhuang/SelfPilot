@@ -283,11 +283,11 @@ pub async fn import_data(
             "overwrite" => {
                 sqlx::query(
                     "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-                     plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
                      name=excluded.name, plan_date=excluded.plan_date, plan_qty=excluded.plan_qty,
-                     actual_qty=excluded.actual_qty, status=excluded.status",
+                     actual_qty=excluded.actual_qty, status=excluded.status, estimated_hours=excluded.estimated_hours",
                 )
                 .bind(&id)
                 .bind(&mapped_goal_id)
@@ -304,6 +304,7 @@ pub async fn import_data(
                 .bind(&t.source)
                 .bind(t.sort_order)
                 .bind(&t.created_at)
+                .bind(t.estimated_hours)
             .execute(&mut *tx)
             .await?;
         result.tasks_imported += 1;
@@ -311,8 +312,8 @@ pub async fn import_data(
         _ => {
         sqlx::query(
             "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&mapped_goal_id)
@@ -329,6 +330,7 @@ pub async fn import_data(
         .bind(&t.source)
         .bind(t.sort_order)
         .bind(&t.created_at)
+        .bind(t.estimated_hours)
         .execute(&mut *tx)
         .await?;
         result.tasks_imported += 1;

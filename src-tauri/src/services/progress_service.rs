@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use sqlx::SqlitePool;
 
+use crate::db::helpers;
 use crate::db::models::{Goal, ProgressInfo};
 use crate::error::{AppError, AppResult};
 
@@ -11,7 +12,7 @@ pub async fn calc_goal_progress(pool: &SqlitePool, goal_id: &str) -> AppResult<P
         .bind(goal_id)
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", goal_id)))?;
+        .ok_or_else(|| helpers::not_found("目标", goal_id))?;
 
     // 递归收集所有后代目标 ID
     let descendant_ids = collect_descendant_goal_ids(pool, goal_id).await?;

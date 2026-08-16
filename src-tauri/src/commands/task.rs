@@ -6,6 +6,7 @@ use crate::db::models::{
     Goal, MoveTaskInput, SetTaskDependencyInput, Task, TaskDependency, TodayTask, UpdateTaskInput,
 };
 use crate::db::DbPool;
+use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use crate::services::dependency_service;
 
@@ -18,29 +19,28 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
     let unit = input.unit.unwrap_or_default();
     let path = format!("/{}/{}", input.goal_id, id);
 
-    sqlx::query(
-        "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-         plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&input.goal_id)
-    .bind(&input.stage_id)
-    .bind(&input.goal_id)
-    .bind(&path)
-    .bind(&input.name)
-    .bind(&input.plan_date)
-    .bind(plan_qty)
-    .bind(0.0)
-    .bind(&unit)
-    .bind("pending")
-    .bind(1)
-    .bind("manual")
-    .bind(0)
-    .bind(&now)
-    .bind(None::<f64>)
-    .execute(&state.0)
-    .await?;
+    // R-03：使用 helpers::insert_task_row 统一 16 列 INSERT
+    // 注：原代码 parent_id 绑定的是 input.goal_id（历史行为），此处保留以避免引入行为变化
+    let new_task = Task {
+        id: id.clone(),
+        goal_id: input.goal_id.clone(),
+        stage_id: input.stage_id.clone(),
+        parent_id: Some(input.goal_id.clone()),
+        path: path.clone(),
+        name: input.name.clone(),
+        plan_date: input.plan_date.clone(),
+        overdue_date: None,
+        plan_qty,
+        actual_qty: 0.0,
+        unit: unit.clone(),
+        status: "pending".to_string(),
+        is_manual: 1,
+        source: "manual".to_string(),
+        sort_order: 0,
+        created_at: now.clone(),
+        estimated_hours: None,
+    };
+    helpers::insert_task_row(&state.0, &new_task).await?;
 
     let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&id)
@@ -69,7 +69,7 @@ pub async fn complete_task(
         .bind(&input.task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &input.task_id))?;
 
     // 禁止对已完成任务再次标记完成
     if task.status == "done" {
@@ -122,7 +122,7 @@ pub async fn skip_task(task_id: String, state: State<'_, DbPool>) -> AppResult<T
         .bind(&task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &task_id))?;
 
     sqlx::query("UPDATE tasks SET status = 'skipped' WHERE id = ?")
         .bind(&task_id)
@@ -244,7 +244,7 @@ pub async fn backfill_task(
         .bind(&input.task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &input.task_id))?;
 
     // 已完成且补完成量不超过原完成量时禁止重复标记
     if task.status == "done" && input.actual_qty <= task.actual_qty {
@@ -297,7 +297,7 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
         .bind(&input.task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &input.task_id))?;
 
     let cross_goal = input.goal_id.is_some();
     let new_goal_id = match &input.goal_id {
@@ -307,7 +307,7 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
                 .bind(gid)
                 .fetch_optional(&state.0)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("目标 {} 不存在", gid)))?;
+                .ok_or_else(|| helpers::not_found("目标", &gid))?;
             gid.clone()
         }
         None => task.goal_id.clone(),
@@ -333,7 +333,7 @@ pub async fn move_task(input: MoveTaskInput, state: State<'_, DbPool>) -> AppRes
             .bind(before_id)
             .fetch_optional(&state.0)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("前置任务 {} 不存在", before_id)))?;
+            .ok_or_else(|| helpers::not_found("前置任务", &before_id))?;
         if before.goal_id != new_goal_id {
             return Err(AppError::Param(
                 "前置任务不属于目标目标，无法排序".into(),
@@ -441,7 +441,7 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
         .bind(&input.task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &input.task_id))?;
 
     let mut updates: Vec<String> = Vec::new();
     let mut mark_manual = false;
@@ -538,7 +538,7 @@ pub async fn delete_task(task_id: String, state: State<'_, DbPool>) -> AppResult
         .bind(&task_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &task_id))?;
 
     // 清理依赖：删除该任务作为 task_id 或 depends_on_id 的所有记录
     sqlx::query("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?")
@@ -687,12 +687,12 @@ pub async fn set_task_dependency(
         .bind(&input.task_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", input.task_id)))?;
+        .ok_or_else(|| helpers::not_found("任务", &input.task_id))?;
     let _dep: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&input.depends_on_id)
         .fetch_optional(&state.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("前置任务 {} 不存在", input.depends_on_id)))?;
+        .ok_or_else(|| helpers::not_found("前置任务", &input.depends_on_id))?;
 
     // 环检测：添加该依赖是否会形成循环
     if dependency_service::detect_cycle(&state.0, &input.task_id, &input.depends_on_id).await? {

@@ -66,7 +66,9 @@ export function useCalendarData(
       if (token !== loadToken) return;
 
       console.error("加载数据失败:", e);
-      throw e;
+      // 不再 re-throw：loadData 作为 watch 回调和 onMounted 调用，
+      // re-throw 会导致 Vue 报告未捕获异常并可能中断渲染流程。
+      // 静默降级（保持空数据 + loading=false）是更安全的兜底行为。
     } finally {
       // 只有最新请求才更新loading
       if (token === loadToken) {

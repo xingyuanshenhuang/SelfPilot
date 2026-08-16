@@ -530,72 +530,11 @@ pub async fn get_celebration_achievement(
         0
     };
 
-    // 4. 获取连续天数（简化：查询 settings 或重新计算）
-    // 使用已有的 get_streak 命令逻辑，这里直接查询
-    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT plan_date,
-                COUNT(*) as task_count,
-                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_count
-         FROM tasks
-         WHERE plan_date IS NOT NULL AND status != 'skipped'
-         GROUP BY plan_date",
-    )
-    .fetch_all(&state.0)
-    .await?;
-
-    use std::collections::HashMap;
-    let mut day_map: HashMap<chrono::NaiveDate, (bool, bool)> = HashMap::new();
-    for (date_str, task_count, done_count) in rows {
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
-            let has_task = task_count > 0;
-            let completed = done_count > 0;
-            day_map.insert(d, (has_task, completed));
-        }
-    }
-
-    // 计算当前连续天数
-    let mut current_streak: i64 = 0;
-    let mut cursor = today - chrono::Duration::days(1);
-    let today_entry = day_map.get(&today);
-    let _completed_today = today_entry.map(|(_, c)| *c).unwrap_or(false);
-
-    match today_entry {
-        None => {}
-        Some((true, false)) => {
-            current_streak = 0;
-        }
-        Some((true, true)) => {
-            current_streak = 1;
-        }
-        _ => {}
-    }
-
-    let today_unfinished = matches!(today_entry, Some((true, false)));
-    if !today_unfinished {
-        loop {
-            let entry = day_map.get(&cursor);
-            match entry {
-                None => {
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, true)) => {
-                    current_streak += 1;
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-                Some((true, false)) => {
-                    break;
-                }
-                _ => {
-                    cursor = cursor - chrono::Duration::days(1);
-                }
-            }
-            if (today - cursor).num_days() > 3650 {
-                break;
-            }
-        }
-    }
-
-    let final_longest_streak = current_streak; // 简化：使用当前连续
+    // 4. 获取连续天数
+    // R-02：统一调用 streak_service::calc_streak，消除重复实现并修复 longest_streak 隐性 bug
+    let streak_info = crate::services::streak_service::calc_streak(&state.0).await?;
+    let current_streak = streak_info.current_streak;
+    let final_longest_streak = streak_info.longest_streak;
 
     Ok(CelebrationAchievement {
         total_goals: goal_count as i32,
