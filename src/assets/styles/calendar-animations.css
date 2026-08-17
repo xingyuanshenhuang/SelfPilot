@@ -1,0 +1,44 @@
+/* 日历视图动画效果 */
+.animate-slide-left {
+  animation: slideLeft 200ms ease-in-out;
+}
+
+.animate-slide-right {
+  animation: slideRight 200ms ease-in-out;
+}
+
+@keyframes slideLeft {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(-20px);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideRight {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(20px);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 确保动画不会影响其他元素 */
+.calendar-root {
+  /* 保证日历容器有合适的定位上下文 */
+  position: relative;
+}

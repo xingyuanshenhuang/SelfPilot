@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   NCard,
   NSpin,
@@ -11,7 +11,7 @@ import {
   NProgress,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
-import { format, isToday } from "date-fns";
+import { format, isToday, addWeeks, subWeeks } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
 import { STATUS_META } from "@/types";
@@ -42,9 +42,58 @@ interface WeekViewEmits {
   (e: "batch-complete"): void;
   /** 批量跳过 */
   (e: "batch-skip"): void;
+  /** 切换周 */
+  (e: "change-week", newStartDate: Date): void;
 }
 
 const emit = defineEmits<WeekViewEmits>();
+
+// ===== 动画状态 =====
+
+const animationClass = ref("");
+
+// ===== 键盘导航 =====
+
+let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function setupKeyboardNavigation() {
+  keyboardHandler = (e: KeyboardEvent) => {
+    // 只处理左右箭头键
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      // 获取当前周的第一天（周一）
+      const firstDay = props.weekGrid[0];
+      const prevWeek = subWeeks(firstDay, 1);
+      // 设置动画类
+      animationClass.value = "animate-slide-left";
+      setTimeout(() => {
+        emit("change-week", prevWeek);
+        animationClass.value = "";
+      }, 200);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      // 获取当前周的第一天（周一）
+      const firstDay = props.weekGrid[0];
+      const nextWeek = addWeeks(firstDay, 1);
+      // 设置动画类
+      animationClass.value = "animate-slide-right";
+      setTimeout(() => {
+        emit("change-week", nextWeek);
+        animationClass.value = "";
+      }, 200);
+    }
+  };
+
+  // 添加键盘事件监听器
+  window.addEventListener("keydown", keyboardHandler);
+}
+
+function cleanupKeyboardNavigation() {
+  if (keyboardHandler) {
+    window.removeEventListener("keydown", keyboardHandler);
+    keyboardHandler = null;
+  }
+}
 
 // ===== 任务统计（computed 缓存，避免模板中重复计算） =====
 
@@ -148,10 +197,20 @@ function handleBatchComplete() {
 function handleBatchSkip() {
   emit("batch-skip");
 }
+
+// ===== 生命周期 =====
+
+onMounted(() => {
+  setupKeyboardNavigation();
+});
+
+onUnmounted(() => {
+  cleanupKeyboardNavigation();
+});
 </script>
 
 <template>
-  <NCard :bordered="false" role="region" aria-label="周视图" tabindex="-1">
+  <NCard :bordered="false" role="region" aria-label="周视图" tabindex="0" :class="animationClass">
     <!-- 批量操作工具栏 -->
     <div
       v-if="weekHasTasks"

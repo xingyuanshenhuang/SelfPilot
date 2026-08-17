@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from "vue";
+import { ref, nextTick, onMounted, onUnmounted } from "vue";
 import {
   NCard,
   NSpin,
@@ -16,7 +16,7 @@ import {
   useDialog,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
-import { format, isToday } from "date-fns";
+import { format, isToday, addDays, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
 import { STATUS_META } from "@/types";
@@ -59,12 +59,57 @@ interface DayViewEmits {
     goalId: string | null;
     planQty: number | null;
   }): void;
+  /** 切换日期 */
+  (e: "change-date", newDate: Date): void;
 }
 
 const emit = defineEmits<DayViewEmits>();
 
 const message = useMessage();
 const dialog = useDialog();
+
+// ===== 动画状态 =====
+
+const animationClass = ref("");
+
+// ===== 键盘导航 =====
+
+let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function setupKeyboardNavigation() {
+  keyboardHandler = (e: KeyboardEvent) => {
+    // 只处理左右箭头键
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      const prevDay = subDays(props.selectedDate, 1);
+      // 设置动画类
+      animationClass.value = "animate-slide-left";
+      setTimeout(() => {
+        emit("change-date", prevDay);
+        animationClass.value = "";
+      }, 200);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      const nextDay = addDays(props.selectedDate, 1);
+      // 设置动画类
+      animationClass.value = "animate-slide-right";
+      setTimeout(() => {
+        emit("change-date", nextDay);
+        animationClass.value = "";
+      }, 200);
+    }
+  };
+
+  // 添加键盘事件监听器
+  window.addEventListener("keydown", keyboardHandler);
+}
+
+function cleanupKeyboardNavigation() {
+  if (keyboardHandler) {
+    window.removeEventListener("keydown", keyboardHandler);
+    keyboardHandler = null;
+  }
+}
 
 // ===== P2-4：快速添加栏状态 =====
 
@@ -148,10 +193,20 @@ function handleCreateTask() {
     document.getElementById("quick-task-name")?.focus();
   });
 }
+
+// ===== 生命周期 =====
+
+onMounted(() => {
+  setupKeyboardNavigation();
+});
+
+onUnmounted(() => {
+  cleanupKeyboardNavigation();
+});
 </script>
 
 <template>
-  <div class="space-y-3" role="region" aria-label="日视图" tabindex="-1">
+  <div class="space-y-3" role="region" aria-label="日视图" tabindex="0" :class="animationClass">
     <NCard :bordered="false">
       <template #header>
         <div class="flex items-center gap-2">

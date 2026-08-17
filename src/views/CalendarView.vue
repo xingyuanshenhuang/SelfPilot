@@ -27,6 +27,10 @@ import {
   eachDayOfInterval,
   startOfWeek,
   endOfWeek,
+  addDays,
+  subDays,
+  addWeeks,
+  subWeeks,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
@@ -259,6 +263,26 @@ function handleSelectDay(day: Date) {
   switchView("day");
 }
 
+// ===== 处理来自子组件的日期切换事件 =====
+
+function handleChangeDate(newDate: Date) {
+  // 用于处理日视图的日期切换
+  currentDate.value = newDate;
+  // 切换到日视图确保视图正确显示
+  if (viewMode.value !== "day") {
+    switchView("day");
+  }
+}
+
+function handleChangeWeek(newStartDate: Date) {
+  // 用于处理周视图的日期切换
+  currentDate.value = newStartDate;
+  // 切换到周视图确保视图正确显示
+  if (viewMode.value !== "week") {
+    switchView("week");
+  }
+}
+
 // ===== 月视图创建任务弹窗 =====
 
 const showCreateTaskModal = ref(false);
@@ -474,6 +498,7 @@ async function handleMoveTask(
       @clear-selection="clearSelection"
       @batch-complete="handleBatchComplete"
       @batch-skip="handleBatchSkip"
+      @change-week="handleChangeWeek"
     />
 
     <!-- 日视图 -->
@@ -492,6 +517,7 @@ async function handleMoveTask(
       @complete-task="quickComplete"
       @skip-task="quickSkip"
       @create-task="handleCreateTaskInDay"
+      @change-date="handleChangeDate"
     />
 
     <!-- 月视图创建任务弹窗 -->
