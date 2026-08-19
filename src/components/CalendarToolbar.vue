@@ -12,9 +12,8 @@ import {
   NIcon,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
-import type { TaskStatus } from "@/types";
-
-type ViewMode = "month" | "week" | "day";
+import type { TaskStatus, ViewMode } from "@/types";
+import { statusOptions } from "@/utils/calendar";
 
 // ===== Props & Emits =====
 
@@ -64,13 +63,6 @@ const filterStatuses = ref<TaskStatus[]>([]);
 const filterOverdueOnly = ref(false);
 const filterCollapsed = ref(true);
 const filterContentRef = ref<HTMLElement | null>(null);
-
-const statusOptions: { label: string; value: TaskStatus }[] = [
-  { label: "未完成", value: "pending" },
-  { label: "部分完成", value: "partial" },
-  { label: "已完成", value: "done" },
-  { label: "已跳过", value: "skipped" },
-];
 
 // ===== 事件处理 =====
 

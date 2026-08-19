@@ -3,8 +3,6 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   NCard,
   NSpin,
-  NSpace,
-  NButton,
   NCheckbox,
   NPopover,
   NTag,
@@ -15,6 +13,13 @@ import { format, isToday, addWeeks, subWeeks } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
 import { STATUS_META } from "@/types";
+import {
+  getTaskAriaLabel,
+  getDayAriaLabel,
+  getDayStats as calcDayStats,
+  getBlockedTooltip,
+} from "@/utils/task";
+import BatchToolbar from "@/components/BatchToolbar.vue";
 
 // ===== Props & Emits =====
 
@@ -111,10 +116,7 @@ const dayStatsMap = computed(() => {
   for (const day of props.weekGrid) {
     const key = format(day, "yyyy-MM-dd");
     const tasks = props.tasksByDate[key] || [];
-    const total = tasks.length;
-    const done = tasks.filter((t) => t.status === "done").length;
-    const partial = tasks.filter((t) => t.status === "partial").length;
-    const overdue = tasks.filter((t) => t.is_overdue).length;
+    const { total, done, partial, overdue } = calcDayStats(tasks);
     const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
     map[key] = { total, done, partial, overdue, tasks, completionRate };
   }
@@ -145,36 +147,7 @@ function getDayCompletionRate(day: Date): number {
 }
 
 // ===== ARIA 标签 =====
-
-function getDayAriaLabel(day: Date): string {
-  const dateStr = format(day, "yyyy 年 M 月 d 日 EEEE", { locale: zhCN });
-  const stats = getDayStats(day);
-  if (stats.total === 0) return `${dateStr}，无任务`;
-  const parts = [
-    `${dateStr}，共 ${stats.total} 个任务`,
-    `已完成 ${stats.done}`,
-  ];
-  if (stats.overdue > 0) parts.push(`${stats.overdue} 个逾期`);
-  return parts.join("，");
-}
-
-function getTaskAriaLabel(t: CalendarTask): string {
-  const parts = [
-    t.name,
-    `状态：${STATUS_META[t.status].label}`,
-    `目标：${t.goal_name}`,
-    `进度：${t.actual_qty}/${t.plan_qty}${t.unit}`,
-  ];
-  if (t.is_overdue) parts.push("已逾期");
-  if (t.is_blocked) {
-    parts.push(
-      t.blocked_by_names
-        ? `前置未完成：${t.blocked_by_names}`
-        : "前置任务未完成",
-    );
-  }
-  return parts.join("，");
-}
+// getDayAriaLabel / getTaskAriaLabel / getBlockedTooltip 统一见 @/utils/task（R-04a 收敛）
 
 // ===== 事件处理 =====
 
@@ -211,55 +184,21 @@ onUnmounted(() => {
 
 <template>
   <NCard :bordered="false" role="region" aria-label="周视图" tabindex="0" :class="animationClass">
-    <!-- 批量操作工具栏 -->
-    <div
+    <!-- 批量操作工具栏（R-05a 公共组件） -->
+    <BatchToolbar
       v-if="weekHasTasks"
-      class="flex items-center justify-between mb-3 pb-2 border-b border-gray-100"
+      :selected-count="selectedTaskIds.size"
+      select-all-label="全选本周"
+      bordered
+      @select-all="handleSelectAllWeek"
+      @clear-selection="handleClearSelection"
+      @batch-complete="handleBatchComplete"
+      @batch-skip="handleBatchSkip"
     >
-      <span class="text-xs text-gray-500">点击任务前框选以批量操作</span>
-      <NSpace :size="4">
-        <NButton size="small" @click="handleSelectAllWeek">
-          全选本周
-        </NButton>
-        <NButton
-          v-if="selectedTaskIds.size > 0"
-          size="small"
-          @click="handleClearSelection"
-        >
-          清空
-        </NButton>
-        <span
-          v-if="selectedTaskIds.size > 0"
-          class="text-xs text-gray-500 self-center"
-          role="status"
-          aria-live="polite"
-        >
-          已选 {{ selectedTaskIds.size }} 项
-        </span>
-        <NButton
-          size="small"
-          type="primary"
-          :disabled="selectedTaskIds.size === 0"
-          @click="handleBatchComplete"
-        >
-          <template #icon>
-            <Icon icon="mdi:playlist-check" />
-          </template>
-          批量完成
-        </NButton>
-        <NButton
-          size="small"
-          type="warning"
-          :disabled="selectedTaskIds.size === 0"
-          @click="handleBatchSkip"
-        >
-          <template #icon>
-            <Icon icon="mdi:skip-next" />
-          </template>
-          批量跳过
-        </NButton>
-      </NSpace>
-    </div>
+      <template #leading>
+        <span class="text-xs text-gray-500">点击任务前框选以批量操作</span>
+      </template>
+    </BatchToolbar>
 
     <NSpin :show="loading">
       <div class="overflow-x-auto">
@@ -273,7 +212,7 @@ onUnmounted(() => {
             :key="day.toISOString()"
             class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200"
             role="gridcell"
-            :aria-label="getDayAriaLabel(day)"
+            :aria-label="getDayAriaLabel(day, getDayStats(day))"
             :class="{
               'border-brand-500 border-2 bg-brand-100/70 shadow-md ring-1 ring-brand-300':
                 isToday(day),
@@ -375,11 +314,7 @@ onUnmounted(() => {
                   class="text-gray-500 flex items-center gap-1"
                 >
                   <Icon icon="mdi:lock-outline" width="14" />
-                  <span>{{
-                    t.blocked_by_names
-                      ? `前置未完成：${t.blocked_by_names}`
-                      : "前置任务未完成"
-                  }}</span>
+                  <span>{{ getBlockedTooltip(t) }}</span>
                 </div>
               </div>
             </NPopover>

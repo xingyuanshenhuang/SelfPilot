@@ -3,9 +3,16 @@ import { ref, computed, nextTick, type ComponentPublicInstance } from "vue";
 import { NCard, NSpin, NPopover, NTag, NButton } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { format, isSameMonth, isToday, isSameDay } from "date-fns";
-import { zhCN } from "date-fns/locale";
 import type { CalendarTask, DailyLoad } from "@/types";
 import { STATUS_META } from "@/types";
+import type { DayStats } from "@/utils/task";
+import { getDayStats, getDayAriaLabel, EMPTY_DAY_STATS } from "@/utils/task";
+import {
+  getLoadLevel as calcLoadLevel,
+  getLoadColor as calcLoadColor,
+  getRingDashArray as calcRingDashArray,
+  weekDays,
+} from "@/utils/calendar";
 
 // ===== Props & Emits =====
 
@@ -45,22 +52,7 @@ const draggedTask = ref<CalendarTask | null>(null);
 const dragOverDay = ref<Date | null>(null);
 
 // ===== 负载参数 =====
-
-const LOAD_THRESHOLD_MEDIUM = 4;
-const LOAD_THRESHOLD_HIGH = 7;
-const LOAD_THRESHOLD_EXTREME = 11;
-const LOAD_MAX_CAPACITY = 12;
-const RING_RADIUS = 10;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-const LOAD_COLORS: Record<"low" | "medium" | "high" | "extreme", string> = {
-  low: "#22c55e",
-  medium: "#f59e0b",
-  high: "#ef4444",
-  extreme: "#9333ea",
-};
-
-const weekDays = ["一", "二", "三", "四", "五", "六", "日"];
+// 常量与纯函数统一见 @/utils/calendar（R-04b 收敛）
 
 // ===== 月视图特有逻辑 =====
 
@@ -106,50 +98,21 @@ function getTasksOfDay(day: Date): CalendarTask[] {
   return props.tasksByDate[key] || [];
 }
 
-/** 当日完成统计 */
-function getDayStats(day: Date) {
-  const list = getTasksOfDay(day);
-  const total = list.length;
-  const done = list.filter((t) => t.status === "done").length;
-  const partial = list.filter((t) => t.status === "partial").length;
-  const overdue = list.filter((t) => t.is_overdue).length;
-  return { total, done, partial, overdue };
-}
-
 /** 预计算所有日期的统计 */
 const dayStatsMap = computed(() => {
-  const map: Record<string, ReturnType<typeof getDayStats>> = {};
+  const map: Record<string, DayStats> = {};
   for (const key of Object.keys(props.tasksByDate)) {
-    const list = props.tasksByDate[key];
-    const total = list.length;
-    const done = list.filter((t) => t.status === "done").length;
-    const partial = list.filter((t) => t.status === "partial").length;
-    const overdue = list.filter((t) => t.is_overdue).length;
-    map[key] = { total, done, partial, overdue };
+    map[key] = getDayStats(props.tasksByDate[key]);
   }
   return map;
 });
 
-const EMPTY_STATS = { total: 0, done: 0, partial: 0, overdue: 0 };
-
-function getDayStatsCached(day: Date) {
+function getDayStatsCached(day: Date): DayStats {
   const key = format(day, "yyyy-MM-dd");
-  return dayStatsMap.value[key] || EMPTY_STATS;
+  return dayStatsMap.value[key] || EMPTY_DAY_STATS;
 }
 
 // ===== 负载计算 =====
-
-function getLoadLevel(
-  day: Date,
-): "none" | "low" | "medium" | "high" | "extreme" {
-  const key = format(day, "yyyy-MM-dd");
-  const load = props.dailyLoadMap[key];
-  if (!load || load.total_tasks === 0) return "none";
-  if (load.total_tasks >= LOAD_THRESHOLD_EXTREME) return "extreme";
-  if (load.total_tasks >= LOAD_THRESHOLD_HIGH) return "high";
-  if (load.total_tasks >= LOAD_THRESHOLD_MEDIUM) return "medium";
-  return "low";
-}
 
 function getLoadOfDay(day: Date): string {
   const key = format(day, "yyyy-MM-dd");
@@ -161,40 +124,21 @@ function getLoadOfDay(day: Date): string {
   return `${load.total_tasks} 个任务（${detail}）`;
 }
 
-function getLoadColor(day: Date): string {
-  const level = getLoadLevel(day);
-  if (level === "none") return "#d1d5db";
-  return LOAD_COLORS[level];
-}
-
 function getLoadCount(day: Date): number {
   const key = format(day, "yyyy-MM-dd");
   return props.dailyLoadMap[key]?.total_tasks ?? 0;
 }
 
-function getLoadPercentage(day: Date): number {
-  const count = getLoadCount(day);
-  return Math.min(100, Math.round((count / LOAD_MAX_CAPACITY) * 100));
+function getLoadLevel(day: Date) {
+  return calcLoadLevel(getLoadCount(day));
+}
+
+function getLoadColor(day: Date): string {
+  return calcLoadColor(getLoadLevel(day));
 }
 
 function getRingDashArray(day: Date): string {
-  const pct = getLoadPercentage(day);
-  const filled = (pct / 100) * RING_CIRCUMFERENCE;
-  return `${filled} ${RING_CIRCUMFERENCE}`;
-}
-
-// ===== ARIA 标签 =====
-
-function getDayAriaLabel(day: Date): string {
-  const dateStr = format(day, "yyyy 年 M 月 d 日 EEEE", { locale: zhCN });
-  const stats = getDayStatsCached(day);
-  if (stats.total === 0) return `${dateStr}，无任务`;
-  const parts = [
-    `${dateStr}，共 ${stats.total} 个任务`,
-    `已完成 ${stats.done}`,
-  ];
-  if (stats.overdue > 0) parts.push(`${stats.overdue} 个逾期`);
-  return parts.join("，");
+  return calcRingDashArray(getLoadCount(day));
 }
 
 // ===== 事件处理 =====
@@ -344,7 +288,7 @@ defineExpose({
               class="calendar-cell relative flex flex-col items-center justify-center min-h-[88px] p-1.5 rounded border cursor-pointer transition-all duration-200"
               role="button"
               :tabindex="isMonthCellFocusable(day) ? 0 : -1"
-              :aria-label="getDayAriaLabel(day)"
+              :aria-label="getDayAriaLabel(day, getDayStatsCached(day))"
               :aria-current="isToday(day) ? 'date' : undefined"
               :class="{
                 'bg-gray-50': !isSameMonth(day, currentDate) && !isToday(day),

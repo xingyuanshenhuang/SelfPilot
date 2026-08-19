@@ -16,8 +16,9 @@ import {
   getISOWeek,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
+import type { ViewMode } from "@/types";
 
-export type ViewMode = "month" | "week" | "day";
+export type { ViewMode };
 
 export function useCalendarNavigation(initialMode: ViewMode = "month") {
   // ===== 状态 =====

@@ -1,12 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "./client";
 import type { ProgressInfo } from "@/types";
 
 export async function getGoalProgress(goalId: string): Promise<ProgressInfo> {
-  return invoke("get_goal_progress", { goalId });
+  return invokeCommand("get_goal_progress", { goalId });
 }
 
 export async function getAllGoalsProgress(): Promise<ProgressInfo[]> {
-  return invoke("get_all_goals_progress");
+  return invokeCommand("get_all_goals_progress");
 }
 
 /** 获取目标及其所有祖先的进度（P2-3：局部更新专用）
@@ -17,5 +17,5 @@ export async function getAllGoalsProgress(): Promise<ProgressInfo[]> {
 export async function getGoalAncestorsProgress(
   goalId: string,
 ): Promise<ProgressInfo[]> {
-  return invoke("get_goal_ancestors_progress", { goalId });
+  return invokeCommand("get_goal_ancestors_progress", { goalId });
 }

@@ -27,6 +27,7 @@ import type {
   HeatmapCell,
   CompletionPrediction,
   PredictionStatus,
+  TagType,
 } from "@/types";
 import * as statsApi from "@/api/stats";
 import { format, subDays } from "date-fns";
@@ -125,7 +126,6 @@ async function loadPredictions() {
 }
 
 /** 预测状态元信息 */
-type TagType = "default" | "success" | "error" | "warning" | "info" | "primary";
 const PREDICTION_META: Record<
   PredictionStatus,
   { label: string; color: TagType; icon: string; iconColor: string }
@@ -422,7 +422,7 @@ onMounted(() => {
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       <NCard :bordered="false" size="small">
         <NStatistic
-          label="近 {{ trendDays }} 天完成任务数"
+          :label="`近 ${trendDays} 天完成任务数`"
           :value="totalCompletedCount"
         >
           <template #suffix>个</template>
@@ -430,7 +430,7 @@ onMounted(() => {
       </NCard>
       <NCard :bordered="false" size="small">
         <NStatistic
-          label="近 {{ trendDays }} 天完成数量"
+          :label="`近 ${trendDays} 天完成数量`"
           :value="totalCompletedQty"
         />
       </NCard>

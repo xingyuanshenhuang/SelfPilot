@@ -18,10 +18,8 @@ import {
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { useEncouragementStore } from "@/stores/encouragementStore";
-import type { Encouragement, EncouragementLevel } from "@/types";
+import type { Encouragement, EncouragementLevel, TagType } from "@/types";
 import * as encApi from "@/api/encouragement";
-
-type TagType = "default" | "success" | "error" | "warning" | "info" | "primary";
 
 const store = useEncouragementStore();
 const message = useMessage();

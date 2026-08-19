@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "./client";
 import type {
   Goal,
   CreateGoalInput,
@@ -13,31 +13,31 @@ import type {
 } from "@/types";
 
 export async function createGoal(input: CreateGoalInput): Promise<Goal> {
-  return invoke("create_goal", { input });
+  return invokeCommand("create_goal", { input });
 }
 
 export async function listGoals(): Promise<Goal[]> {
-  return invoke("list_goals");
+  return invokeCommand("list_goals");
 }
 
 export async function listGoalTree(): Promise<GoalTreeNode[]> {
-  return invoke("list_goal_tree");
+  return invokeCommand("list_goal_tree");
 }
 
 export async function getGoal(id: string): Promise<Goal> {
-  return invoke("get_goal", { id });
+  return invokeCommand("get_goal", { id });
 }
 
 export async function updateGoal(input: UpdateGoalInput): Promise<Goal> {
-  return invoke("update_goal", { input });
+  return invokeCommand("update_goal", { input });
 }
 
 export async function deleteGoal(id: string): Promise<void> {
-  return invoke("delete_goal", { id });
+  return invokeCommand("delete_goal", { id });
 }
 
 export async function autoSplit(goalId: string): Promise<Task[]> {
-  return invoke("auto_split", { goalId });
+  return invokeCommand("auto_split", { goalId });
 }
 
 /**
@@ -50,7 +50,7 @@ export async function autoSplit(goalId: string): Promise<Task[]> {
  * - 每个任务 estimated_hours = daily_capacity
  */
 export async function splitByCapacity(goalId: string): Promise<Task[]> {
-  return invoke("split_by_capacity", { goalId });
+  return invokeCommand("split_by_capacity", { goalId });
 }
 
 /**
@@ -62,25 +62,25 @@ export async function splitByCapacity(goalId: string): Promise<Task[]> {
  * - by_date_range：自定义起止日期，可选每日数量
  */
 export async function smartSplit(input: SmartSplitInput): Promise<Task[]> {
-  return invoke("smart_split", { input });
+  return invokeCommand("smart_split", { input });
 }
 
 /** 重复拆解（纯文字类任务：每天重复 or 单次） */
 export async function repeatSplit(input: RepeatSplitInput): Promise<Task[]> {
-  return invoke("repeat_split", { input });
+  return invokeCommand("repeat_split", { input });
 }
 
 /** 重新规划预览 */
 export async function replanPreview(goalId: string): Promise<ReplanPreview> {
-  return invoke("replan_preview", { goalId });
+  return invokeCommand("replan_preview", { goalId });
 }
 
 /** 执行重新规划 */
 export async function replanGoal(goalId: string): Promise<ReplanResult> {
-  return invoke("replan_goal", { goalId });
+  return invokeCommand("replan_goal", { goalId });
 }
 
 /** 移动目标（跨层级归属调整与同级排序） */
 export async function moveGoal(input: MoveGoalInput): Promise<Goal> {
-  return invoke("move_goal", { input });
+  return invokeCommand("move_goal", { input });
 }

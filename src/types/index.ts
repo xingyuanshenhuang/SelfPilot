@@ -162,6 +162,18 @@ export interface TodayTask {
 
 export type TaskStatus = "pending" | "partial" | "done" | "skipped";
 
+/** Naive UI 标签/按钮类型（统一入口，避免各视图重复定义） */
+export type TagType =
+  | "default"
+  | "success"
+  | "error"
+  | "warning"
+  | "info"
+  | "primary";
+
+/** 日历视图模式 */
+export type ViewMode = "month" | "week" | "day";
+
 export interface MoveTaskInput {
   task_id: string;
   /** 跨目标移动时指定新目标 ID（拖拽归属） */

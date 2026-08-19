@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import {
   NCard,
   NSpin,
@@ -9,17 +9,15 @@ import {
   NTag,
   NTooltip,
   NEmpty,
-  NInput,
-  NSelect,
-  NInputNumber,
-  useMessage,
-  useDialog,
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { format, isToday, addDays, subDays } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
 import { STATUS_META } from "@/types";
+import { getTaskAriaLabel, getBlockedTooltip } from "@/utils/task";
+import BatchToolbar from "@/components/BatchToolbar.vue";
+import QuickTaskForm from "@/components/QuickTaskForm.vue";
 
 // ===== Props & Emits =====
 
@@ -65,9 +63,6 @@ interface DayViewEmits {
 
 const emit = defineEmits<DayViewEmits>();
 
-const message = useMessage();
-const dialog = useDialog();
-
 // ===== 动画状态 =====
 
 const animationClass = ref("");
@@ -111,32 +106,8 @@ function cleanupKeyboardNavigation() {
   }
 }
 
-// ===== P2-4：快速添加栏状态 =====
-
-const quickTaskName = ref("");
-const quickTaskGoalId = ref<string | null>(null);
-const quickTaskPlanQty = ref<number | null>(null);
-const quickTaskCreating = ref(false);
-
 // ===== ARIA 标签 =====
-
-function getTaskAriaLabel(t: CalendarTask): string {
-  const parts = [
-    t.name,
-    `状态：${STATUS_META[t.status].label}`,
-    `目标：${t.goal_name}`,
-    `进度：${t.actual_qty}/${t.plan_qty}${t.unit}`,
-  ];
-  if (t.is_overdue) parts.push("已逾期");
-  if (t.is_blocked) {
-    parts.push(
-      t.blocked_by_names
-        ? `前置未完成：${t.blocked_by_names}`
-        : "前置任务未完成",
-    );
-  }
-  return parts.join("，");
-}
+// getTaskAriaLabel / getBlockedTooltip 统一见 @/utils/task（R-04a 收敛）
 
 // ===== 事件处理 =====
 
@@ -169,29 +140,14 @@ function handleSkipTask(task: CalendarTask) {
 }
 
 // ===== P2-4：快速创建任务 =====
+// 表单 UI 与校验统一见 QuickTaskForm.vue（R-05b 收敛），提交事件透传
 
-function handleCreateTask() {
-  if (!quickTaskName.value.trim()) {
-    message.warning("请输入任务名称");
-    return;
-  }
-  if (!quickTaskGoalId.value) {
-    message.warning("请选择目标");
-    return;
-  }
-
-  emit("create-task", {
-    name: quickTaskName.value,
-    goalId: quickTaskGoalId.value,
-    planQty: quickTaskPlanQty.value,
-  });
-
-  // 清空输入并聚焦
-  quickTaskName.value = "";
-  quickTaskPlanQty.value = null;
-  nextTick(() => {
-    document.getElementById("quick-task-name")?.focus();
-  });
+function handleQuickTaskSubmit(input: {
+  name: string;
+  goalId: string | null;
+  planQty: number | null;
+}) {
+  emit("create-task", input);
 }
 
 // ===== 生命周期 =====
@@ -224,40 +180,16 @@ onUnmounted(() => {
       </template>
 
       <template #header-extra>
-        <NSpace v-if="tasks.length > 0" :size="4">
-          <NButton size="small" @click="handleSelectAll">全选</NButton>
-          <NButton size="small" @click="handleClearSelection">清空</NButton>
-          <span
-            v-if="selectedTaskIds.size > 0"
-            class="text-xs text-gray-500 self-center"
-            role="status"
-            aria-live="polite"
-          >
-            已选 {{ selectedTaskIds.size }} 项
-          </span>
-          <NButton
-            size="small"
-            type="primary"
-            :disabled="selectedTaskIds.size === 0"
-            @click="handleBatchComplete"
-          >
-            <template #icon>
-              <Icon icon="mdi:playlist-check" />
-            </template>
-            批量完成
-          </NButton>
-          <NButton
-            size="small"
-            type="warning"
-            :disabled="selectedTaskIds.size === 0"
-            @click="handleBatchSkip"
-          >
-            <template #icon>
-              <Icon icon="mdi:skip-next" />
-            </template>
-            批量跳过
-          </NButton>
-        </NSpace>
+        <BatchToolbar
+          v-if="tasks.length > 0"
+          :selected-count="selectedTaskIds.size"
+          select-all-label="全选"
+          :show-clear-always="true"
+          @select-all="handleSelectAll"
+          @clear-selection="handleClearSelection"
+          @batch-complete="handleBatchComplete"
+          @batch-skip="handleBatchSkip"
+        />
       </template>
 
       <NSpin :show="loading">
@@ -306,18 +238,10 @@ onUnmounted(() => {
                         width="14"
                         aria-hidden="true"
                         role="img"
-                        :aria-label="
-                          t.blocked_by_names
-                            ? `前置任务未完成：${t.blocked_by_names}`
-                            : '前置任务未完成，暂不可标记完成'
-                        "
+                        :aria-label="getBlockedTooltip(t)"
                       />
                     </template>
-                    {{
-                      t.blocked_by_names
-                        ? `前置任务未完成：${t.blocked_by_names}`
-                        : '前置任务未完成，暂不可标记完成'
-                    }}
+                    {{ getBlockedTooltip(t) }}
                   </NTooltip>
 
                   <span
@@ -366,11 +290,7 @@ onUnmounted(() => {
                     完成
                   </NButton>
                 </template>
-                {{
-                  t.blocked_by_names
-                    ? `前置任务未完成：${t.blocked_by_names}`
-                    : '前置任务未完成'
-                }}
+                {{ getBlockedTooltip(t) }}
               </NTooltip>
 
               <NButton
@@ -403,76 +323,15 @@ onUnmounted(() => {
         <NEmpty v-else description="当日无任务" />
       </NSpin>
 
-      <!-- P2-4：日视图底部快速添加栏 -->
+      <!-- P2-4：日视图底部快速添加栏（R-05b 公共组件） -->
       <template #footer>
-        <div class="flex flex-wrap items-end gap-2 pt-3 border-t border-gray-100">
-          <!-- 无目标提示 -->
-          <div
-            v-if="goalOptions.length === 0"
-            class="w-full text-center py-3 text-sm text-gray-400"
-          >
-            <Icon icon="mdi:information-outline" width="16" class="mr-1" />
-            当前没有可用目标，请先创建目标
-          </div>
-
-          <div v-else class="flex flex-wrap items-end gap-2 w-full">
-            <div class="flex-1 min-w-[160px]">
-              <label for="quick-task-name" class="block text-xs text-gray-500 mb-1">
-                任务名称
-              </label>
-              <NInput
-                id="quick-task-name"
-                v-model:value="quickTaskName"
-                placeholder="输入任务名，回车创建"
-                size="small"
-                :disabled="quickTaskCreating"
-                @keydown.enter="handleCreateTask"
-              />
-            </div>
-
-            <div class="w-[140px]">
-              <label for="quick-task-goal" class="block text-xs text-gray-500 mb-1">
-                选择目标
-              </label>
-              <NSelect
-                id="quick-task-goal"
-                v-model:value="quickTaskGoalId"
-                :options="goalOptions"
-                placeholder="目标"
-                size="small"
-                :disabled="quickTaskCreating"
-                :max-tag-count="1"
-              />
-            </div>
-
-            <div class="w-[100px]">
-              <label for="quick-task-qty" class="block text-xs text-gray-500 mb-1">
-                数量（可选）
-              </label>
-              <NInputNumber
-                id="quick-task-qty"
-                v-model:value="quickTaskPlanQty"
-                placeholder="1"
-                size="small"
-                :min="1"
-                :disabled="quickTaskCreating"
-              />
-            </div>
-
-            <NButton
-              type="primary"
-              size="small"
-              :disabled="!quickTaskName.trim() || !quickTaskGoalId"
-              :loading="quickTaskCreating"
-              aria-label="创建任务"
-              @click="handleCreateTask"
-            >
-              <template #icon>
-                <Icon icon="mdi:plus" width="16" />
-              </template>
-              添加
-            </NButton>
-          </div>
+        <div class="pt-3 border-t border-gray-100">
+          <QuickTaskForm
+            mode="inline"
+            :goal-options="goalOptions"
+            submit-label="添加"
+            @submit="handleQuickTaskSubmit"
+          />
         </div>
       </template>
     </NCard>

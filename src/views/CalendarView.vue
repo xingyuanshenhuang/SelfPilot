@@ -9,28 +9,17 @@
  * - 删除：已迁移到子组件的模板和逻辑
  */
 
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import {
   useMessage,
   useDialog,
   NModal,
-  NCard,
-  NSpace,
-  NButton,
-  NInput,
-  NSelect,
-  NInputNumber,
 } from "naive-ui";
 import {
   format,
-  isToday,
   eachDayOfInterval,
   startOfWeek,
   endOfWeek,
-  addDays,
-  subDays,
-  addWeeks,
-  subWeeks,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import type { CalendarTask } from "@/types";
@@ -40,11 +29,13 @@ import CalendarMonthView from "@/components/CalendarMonthView.vue";
 import CalendarWeekView from "@/components/CalendarWeekView.vue";
 import CalendarDayView from "@/components/CalendarDayView.vue";
 import CalendarToolbar from "@/components/CalendarToolbar.vue";
+import QuickTaskForm from "@/components/QuickTaskForm.vue";
 
 // Composables
 import { useCalendarNavigation } from "@/composables/useCalendarNavigation";
 import { useCalendarData } from "@/composables/useCalendarData";
 import { useTaskBatch } from "@/composables/useTaskBatch";
+import { useAsyncAction } from "@/composables/useAsyncAction";
 
 // API & Store
 import * as taskApi from "@/api/task";
@@ -76,6 +67,9 @@ const { selectedTaskIds, toggleSelect, selectAllVisible, clearSelection } =
 const goalStore = useGoalStore();
 const message = useMessage();
 const dialog = useDialog();
+
+// R-06：统一异步操作（try/catch + message.error + 可选 loading）
+const { run: runAction } = useAsyncAction();
 
 // ===== 视图切换时清空选择状态 =====
 // 避免跨视图残留选中状态导致显示混乱
@@ -136,18 +130,17 @@ const periodStats = computed(() => {
 // ===== 任务操作 =====
 
 async function quickComplete(task: CalendarTask) {
-  try {
-    const updated = await taskApi.completeTask({
+  const updated = await runAction(() =>
+    taskApi.completeTask({
       task_id: task.id,
       actual_qty: task.plan_qty,
-    });
-    goalStore.updateTaskLocally(updated);
-    await goalStore.refreshProgressForGoalChain(updated.goal_id);
-    await loadData();
-    message.success("已完成");
-  } catch (e) {
-    message.error(String(e));
-  }
+    }),
+  );
+  if (!updated) return;
+  goalStore.updateTaskLocally(updated);
+  await goalStore.refreshProgressForGoalChain(updated.goal_id);
+  await loadData();
+  message.success("已完成");
 }
 
 function quickSkip(task: CalendarTask) {
@@ -157,15 +150,12 @@ function quickSkip(task: CalendarTask) {
     positiveText: "跳过",
     negativeText: "取消",
     onPositiveClick: async () => {
-      try {
-        const updated = await taskApi.skipTask(task.id);
-        goalStore.updateTaskLocally(updated);
-        await goalStore.refreshProgressForGoalChain(updated.goal_id);
-        await loadData();
-        message.info("已跳过");
-      } catch (e) {
-        message.error(String(e));
-      }
+      const updated = await runAction(() => taskApi.skipTask(task.id));
+      if (!updated) return;
+      goalStore.updateTaskLocally(updated);
+      await goalStore.refreshProgressForGoalChain(updated.goal_id);
+      await loadData();
+      message.info("已跳过");
     },
   });
 }
@@ -287,41 +277,40 @@ function handleChangeWeek(newStartDate: Date) {
 
 const showCreateTaskModal = ref(false);
 const createTaskDate = ref<Date>(new Date());
-const createTaskName = ref("");
-const createTaskGoalId = ref<string | null>(null);
-const createTaskPlanQty = ref<number | null>(null);
 
 function handleCreateTask(day: Date, _triggerElement: HTMLElement | null) {
   createTaskDate.value = day;
-  createTaskName.value = "";
-  createTaskGoalId.value = null;
-  createTaskPlanQty.value = null;
   showCreateTaskModal.value = true;
 }
 
-async function submitCreateTask() {
-  if (!createTaskName.value.trim()) {
+/** 提交载荷由 QuickTaskForm 内部状态 emit（R-05b 收敛表单校验与状态） */
+async function submitCreateTask(input: {
+  name: string;
+  goalId: string | null;
+  planQty: number | null;
+}) {
+  if (!input.name.trim()) {
     message.warning("请输入任务名称");
     return;
   }
-  if (!createTaskGoalId.value) {
+  const goalId = input.goalId;
+  if (!goalId) {
     message.warning("请选择目标");
     return;
   }
-  try {
-    const created = await taskApi.createTask({
-      name: createTaskName.value,
-      goal_id: createTaskGoalId.value,
-      plan_qty: createTaskPlanQty.value ?? 1,
+  const created = await runAction(() =>
+    taskApi.createTask({
+      name: input.name,
+      goal_id: goalId,
+      plan_qty: input.planQty ?? 1,
       plan_date: format(createTaskDate.value, "yyyy-MM-dd"),
-    });
-    goalStore.updateTaskLocally(created);
-    await loadData();
-    showCreateTaskModal.value = false;
-    message.success("任务已创建");
-  } catch (e) {
-    message.error(String(e));
-  }
+    }),
+  );
+  if (!created) return;
+  goalStore.updateTaskLocally(created);
+  await loadData();
+  showCreateTaskModal.value = false;
+  message.success("任务已创建");
 }
 
 // ===== 日视图快速创建任务 =====
@@ -331,23 +320,27 @@ async function handleCreateTaskInDay(input: {
   goalId: string | null;
   planQty: number | null;
 }) {
-  if (!input.goalId) {
+  if (!input.name.trim()) {
+    message.warning("请输入任务名称");
+    return;
+  }
+  const goalId = input.goalId;
+  if (!goalId) {
     message.warning("请选择目标");
     return;
   }
-  try {
-    const created = await taskApi.createTask({
+  const created = await runAction(() =>
+    taskApi.createTask({
       name: input.name,
-      goal_id: input.goalId,
+      goal_id: goalId,
       plan_qty: input.planQty ?? 1,
       plan_date: format(currentDate.value, "yyyy-MM-dd"),
-    });
-    goalStore.updateTaskLocally(created);
-    await loadData();
-    message.success("任务已创建");
-  } catch (e) {
-    message.error(String(e));
-  }
+    }),
+  );
+  if (!created) return;
+  goalStore.updateTaskLocally(created);
+  await loadData();
+  message.success("任务已创建");
 }
 
 // ===== 批量操作 =====
@@ -434,22 +427,22 @@ async function handleMoveTask(
   newDate: string,
   oldDate: string,
 ) {
-  try {
-    // 调用API更新任务计划日期
-    const updated = await taskApi.updateTask({
-      task_id: taskId,
-      plan_date: newDate,
-    });
+  // R-06：统一错误提示（改期失败使用固定文案）
+  const updated = await runAction(
+    () =>
+      taskApi.updateTask({
+        task_id: taskId,
+        plan_date: newDate,
+      }),
+    { errorMessage: "改期失败，请重试" },
+  );
+  if (!updated) return;
 
-    message.success(`任务已从 ${oldDate} 移至 ${newDate}`);
+  message.success(`任务已从 ${oldDate} 移至 ${newDate}`);
 
-    // 刷新数据
-    await loadData();
-    await goalStore.refreshProgressForGoalChain(updated.goal_id);
-  } catch (err) {
-    console.error("拖拽改期失败:", err);
-    message.error("改期失败，请重试");
-  }
+  // 刷新数据
+  await loadData();
+  await goalStore.refreshProgressForGoalChain(updated.goal_id);
 }
 </script>
 
@@ -520,7 +513,7 @@ async function handleMoveTask(
       @change-date="handleChangeDate"
     />
 
-    <!-- 月视图创建任务弹窗 -->
+    <!-- 月视图创建任务弹窗（R-05b 公共组件） -->
     <NModal
       v-model:show="showCreateTaskModal"
       preset="card"
@@ -528,47 +521,14 @@ async function handleMoveTask(
       style="width: 420px"
       :mask-closable="true"
     >
-      <NSpace vertical :size="16">
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">任务名称</label>
-          <NInput
-            v-model:value="createTaskName"
-            placeholder="输入任务名"
-            @keydown.enter="submitCreateTask"
-          />
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">选择目标</label>
-          <NSelect
-            v-model:value="createTaskGoalId"
-            :options="goalOptions"
-            placeholder="选择目标"
-            :max-tag-count="1"
-          />
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">数量（可选）</label>
-          <NInputNumber
-            v-model:value="createTaskPlanQty"
-            placeholder="1"
-            :min="1"
-            style="width: 100%"
-          />
-        </div>
-      </NSpace>
-
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showCreateTaskModal = false">取消</NButton>
-          <NButton
-            type="primary"
-            :disabled="!createTaskName.trim() || !createTaskGoalId"
-            @click="submitCreateTask"
-          >
-            创建
-          </NButton>
-        </NSpace>
-      </template>
+      <QuickTaskForm
+        mode="modal"
+        :goal-options="goalOptions"
+        submit-label="创建"
+        :reset-on-submit="false"
+        @submit="submitCreateTask"
+        @cancel="showCreateTaskModal = false"
+      />
     </NModal>
   </div>
 </template>
