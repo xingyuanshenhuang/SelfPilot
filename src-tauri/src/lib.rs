@@ -16,6 +16,20 @@ pub fn run() {
             let app_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_dir)?;
 
+            // S-04 (SEC-M-04)：初始化 tracing 日志，按天滚动写入应用数据目录 logs/
+            // 内部错误（含 SQL/路径等敏感细节）仅记录到日志，前端只接收脱敏提示
+            let log_dir = app_dir.join("logs");
+            std::fs::create_dir_all(&log_dir)?;
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "selfpilot.log");
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(file_appender)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info".into()),
+                )
+                .init();
+
             // 构建 SQLite 数据库连接
             let db_path = app_dir.join("selfpilot.db");
             let db_url = format!("sqlite://{}?mode=rwc", db_path.display());

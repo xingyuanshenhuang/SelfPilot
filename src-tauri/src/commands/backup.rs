@@ -1,11 +1,75 @@
 use std::io::Read;
 use tauri::{AppHandle, Manager, State};
+use validator::Validate;
 
 use crate::db::models::{
     Encouragement, ExportData, Goal, ImportInput, ImportResult, Setting, Task,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+
+/// S-05 (SEC-M-06)：导入数据允许的 settings key 白名单
+///
+/// 仅放行应用自身使用的设置项，防止导入的备份写入任意 settings 行
+/// （settings 会被 streak 检测等后端逻辑读取）。
+const IMPORT_ALLOWED_SETTING_KEYS: &[&str] = &[
+    // 主题（settingStore）
+    "theme",
+    // 鼓励语偏好（P1-4）
+    "encouragement_enabled",
+    "encouragement_frequency",
+    "encouragement_style",
+    "encouragement_celebration_animation",
+    "encouragement_emoji_enabled",
+    // streak 检测游标（P1-2）
+    "last_streak_check_date",
+    "last_streak_value",
+];
+
+/// S-05 (SEC-M-06)：校验导入数据的枚举字段合法性
+///
+/// 枚举值与数据库 CHECK 约束对齐，拒绝被篡改/损坏的备份，
+/// 防止非法 status/source/category/level 绕过约束写入。
+fn validate_import_payload(data: &ExportData) -> AppResult<()> {
+    for t in &data.tasks {
+        if !["pending", "partial", "done", "skipped"].contains(&t.status.as_str()) {
+            return Err(AppError::Param(format!(
+                "任务 {} 的 status 非法: {}",
+                t.id, t.status
+            )));
+        }
+        if !["auto", "manual"].contains(&t.source.as_str()) {
+            return Err(AppError::Param(format!(
+                "任务 {} 的 source 非法: {}",
+                t.id, t.source
+            )));
+        }
+    }
+    for e in &data.encouragements {
+        if !["preset", "custom"].contains(&e.category.as_str()) {
+            return Err(AppError::Param(format!(
+                "鼓励语 {} 的 category 非法: {}",
+                e.id, e.category
+            )));
+        }
+        if ![
+            "normal",
+            "advanced",
+            "highlight",
+            "celebration",
+            "setback",
+            "longest_streak",
+        ]
+        .contains(&e.level.as_str())
+        {
+            return Err(AppError::Param(format!(
+                "鼓励语 {} 的 level 非法: {}",
+                e.id, e.level
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// S-02 (SEC-H-01/SEC-M-02/SEC-M-03): 校验文件路径安全性
 ///
@@ -149,10 +213,16 @@ pub async fn import_data(
     input: ImportInput,
     state: State<'_, DbPool>,
 ) -> AppResult<ImportResult> {
+    // S-05 (SEC-M-06)：入参校验（JSON ≤ 50MB、冲突模式枚举）
+    input.validate()?;
+
     let mut tx = state.0.begin().await?;
 
     let data: ExportData = serde_json::from_str(&input.data)
         .map_err(|e| AppError::Param(format!("JSON 解析失败: {}", e)))?;
+
+    // S-05 (SEC-M-06)：导入内容校验（status/source/category/level 枚举合法性）
+    validate_import_payload(&data)?;
 
     let mode = input.conflict_mode.as_str();
     if !["skip", "overwrite", "rename"].contains(&mode) {
@@ -435,6 +505,10 @@ pub async fn import_data(
 
     // 导入 settings（upsert）
     for s in data.settings {
+        // S-05 (SEC-M-06)：settings key 白名单过滤，白名单外的键直接跳过
+        if !IMPORT_ALLOWED_SETTING_KEYS.contains(&s.key.as_str()) {
+            continue;
+        }
         sqlx::query(
             "INSERT INTO settings (key, value) VALUES (?, ?)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",

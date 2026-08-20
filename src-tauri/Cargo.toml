@@ -23,6 +23,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 rand = "0.8"
+# S-04 (SEC-M-04)：错误脱敏 + 结构化日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+# S-05 (SEC-M-05)：入参校验
+validator = { version = "0.18", features = ["derive"] }
 
 [profile.dev]
 incremental = true

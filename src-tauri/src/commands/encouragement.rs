@@ -11,6 +11,7 @@ use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use sqlx::QueryBuilder;
+use validator::Validate;
 
 /// 鼓励语展示历史去重窗口：最近 N 条不重复
 const DEDUP_WINDOW: i64 = 5;
@@ -129,10 +130,10 @@ async fn pick_by_level(
             return Ok(None);
         }
 
-        return Ok(Some(weighted_random_pick(fallback_candidates, &recent_shown)));
+        return Ok(Some(weighted_random_pick(fallback_candidates, &recent_shown)?));
     }
 
-    Ok(Some(weighted_random_pick(candidates, &recent_shown)))
+    Ok(Some(weighted_random_pick(candidates, &recent_shown)?))
 }
 
 /// P3-1：候选文案（包含统计信息）
@@ -151,11 +152,17 @@ struct CandidateWithStats {
 }
 
 /// P3-1：加权随机抽取（从候选列表中按权重随机选择）
-fn weighted_random_pick(candidates: Vec<CandidateWithStats>, recent_shown_ids: &[String]) -> Encouragement {
+///
+/// S-06 (SEC-L-01)：空候选列表返回 `AppError::Business` 而非 panic，
+/// 避免命令执行途中应用崩溃。
+fn weighted_random_pick(
+    candidates: Vec<CandidateWithStats>,
+    recent_shown_ids: &[String],
+) -> AppResult<Encouragement> {
     use rand::Rng;
 
     if candidates.is_empty() {
-        panic!("candidates should not be empty");
+        return Err(AppError::Business("候选鼓励语列表为空".into()));
     }
 
     // 计算每条文案的权重
@@ -201,7 +208,7 @@ fn weighted_random_pick(candidates: Vec<CandidateWithStats>, recent_shown_ids: &
     for (weight, candidate) in weighted {
         random_val -= weight;
         if random_val <= 0.0 {
-            return Encouragement {
+            return Ok(Encouragement {
                 id: candidate.id.clone(),
                 text: candidate.text.clone(),
                 category: candidate.category.clone(),
@@ -210,13 +217,16 @@ fn weighted_random_pick(candidates: Vec<CandidateWithStats>, recent_shown_ids: &
                 context_tags: candidate.context_tags.clone(),
                 hidden: candidate.hidden,
                 sort_order: candidate.sort_order,
-            };
+            });
         }
     }
 
-    // 不应该到达这里，返回最后一个
-    let last = candidates.last().unwrap();
-    Encouragement {
+    // 不应该到达这里（浮点累减误差兜底），返回最后一个
+    // S-06：函数入口已排除空列表，此处仍用 ok_or 兜底，避免 unwrap 引发崩溃
+    let last = candidates
+        .last()
+        .ok_or_else(|| AppError::Business("候选鼓励语列表为空".into()))?;
+    Ok(Encouragement {
         id: last.id.clone(),
         text: last.text.clone(),
         category: last.category.clone(),
@@ -225,7 +235,7 @@ fn weighted_random_pick(candidates: Vec<CandidateWithStats>, recent_shown_ids: &
         context_tags: last.context_tags.clone(),
         hidden: last.hidden,
         sort_order: last.sort_order,
-    }
+    })
 }
 
 /// 从全库随机抽取一条，排除指定 ids（无等级过滤，P2-5：排除隐藏）
@@ -318,6 +328,9 @@ pub async fn add_encouragement(
     input: AddEncouragementInput,
     state: State<'_, DbPool>,
 ) -> AppResult<Encouragement> {
+    // S-05 (SEC-M-05)：入参校验（文本长度 ≤ 100、等级枚举）
+    input.validate()?;
+
     if input.text.trim().is_empty() {
         return Err(AppError::Param("鼓励语内容不能为空".into()));
     }
@@ -773,6 +786,14 @@ pub async fn batch_delete_encouragements(
     ids: Vec<String>,
     state: State<'_, DbPool>,
 ) -> AppResult<i64> {
+    // S-05 (SEC-M-05)：批量操作数组长度上限
+    if ids.len() > crate::db::models::MAX_BATCH_SIZE {
+        return Err(AppError::Param(format!(
+            "批量操作一次最多 {} 条",
+            crate::db::models::MAX_BATCH_SIZE
+        )));
+    }
+
     let mut tx = state.0.begin().await?;
     let mut deleted = 0i64;
 
@@ -819,8 +840,17 @@ pub async fn batch_update_encouragement_level(
     level: String,
     state: State<'_, DbPool>,
 ) -> AppResult<i64> {
+    // S-05 (SEC-M-05)：批量操作数组长度上限
+    if ids.len() > crate::db::models::MAX_BATCH_SIZE {
+        return Err(AppError::Param(format!(
+            "批量操作一次最多 {} 条",
+            crate::db::models::MAX_BATCH_SIZE
+        )));
+    }
+
     // 校验等级合法性
-    let _ = validate_level(&Some(level.clone()));
+    // S-05：原先 `let _ = validate_level(...)` 丢弃了校验结果，非法等级可入库，改为错误传播
+    validate_level(&Some(level.clone()))?;
 
     let mut tx = state.0.begin().await?;
     let mut updated = 0i64;

@@ -10,12 +10,16 @@ use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use crate::services::{dependency_service, progress_service, split_service};
+use validator::Validate;
 
 /// 创建目标（总目标或子目标）
 ///
 /// parent_id=None → 总目标；parent_id=Some → 子目标
 #[tauri::command]
 pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> AppResult<Goal> {
+    // S-05 (SEC-M-05)：入参校验（名称长度、日期格式、数量非负有限）
+    input.validate()?;
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
     let total_qty = input.total_qty.unwrap_or(0.0);
@@ -169,6 +173,9 @@ pub async fn get_goal(id: String, state: State<'_, DbPool>) -> AppResult<Goal> {
 /// 更新目标（名称、截止日期、总量、单位）
 #[tauri::command]
 pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> AppResult<Goal> {
+    // S-05 (SEC-M-05)：入参校验
+    input.validate()?;
+
     let mut updates: Vec<String> = Vec::new();
     if input.name.is_some() {
         updates.push("name = ?".to_string());
@@ -403,6 +410,9 @@ pub async fn split_by_capacity(goal_id: String, state: State<'_, DbPool>) -> App
 /// - end_date > start_date → 每天生成一个重复任务
 #[tauri::command]
 pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    // S-05 (SEC-M-05)：入参校验（名称/日期/数量/频率/周几/每月几号）
+    input.validate()?;
+
     let mut tx = state.0.begin().await?;
 
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
@@ -450,6 +460,9 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
 /// 详见 `split_service::smart_split`。
 #[tauri::command]
 pub async fn smart_split(input: SmartSplitInput, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
+    // S-05 (SEC-M-05)：入参校验（策略/日期/数量）
+    input.validate()?;
+
     let mut tx = state.0.begin().await?;
 
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")

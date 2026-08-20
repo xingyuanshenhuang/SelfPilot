@@ -1,4 +1,135 @@
 use serde::{Deserialize, Serialize};
+use validator::{Validate, ValidationError};
+
+// ============================================================
+// S-05 (SEC-M-05/SEC-M-06)：入参校验常量与辅助函数
+// ============================================================
+
+/// 批量操作数组长度上限
+pub const MAX_BATCH_SIZE: usize = 500;
+
+/// 导入数据 JSON 大小上限（50MB）
+pub const MAX_IMPORT_JSON_BYTES: usize = 50 * 1024 * 1024;
+
+/// 校验名称：去除首尾空白后非空，且不超过 200 字符（中文友好）
+fn validate_name(s: &str) -> Result<(), ValidationError> {
+    if s.trim().is_empty() {
+        Err(ValidationError::new("名称不能为空白"))
+    } else if s.chars().count() > 200 {
+        Err(ValidationError::new("名称长度不能超过 200 字"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 校验日期格式 yyyy-MM-dd（严格，不允许空串）
+fn validate_date_format(s: &str) -> Result<(), ValidationError> {
+    if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        Ok(())
+    } else {
+        Err(ValidationError::new("日期格式必须为 yyyy-MM-dd"))
+    }
+}
+
+/// 校验日期格式 yyyy-MM-dd（宽松：空串表示"清除日期"，用于更新场景）
+fn validate_date_optional_clear(s: &str) -> Result<(), ValidationError> {
+    if s.is_empty() {
+        Ok(())
+    } else {
+        validate_date_format(s)
+    }
+}
+
+/// 校验数量：非负有限数（拒绝 NaN / Infinity / 负数）
+///
+/// 注：validator 0.18 对数值字段按值传递（f64: Copy），故此处不取引用
+fn validate_qty(v: f64) -> Result<(), ValidationError> {
+    if v.is_finite() && v >= 0.0 {
+        Ok(())
+    } else {
+        Err(ValidationError::new("数量必须为非负有限数"))
+    }
+}
+
+/// 校验鼓励语文本：非空白且不超过 100 字
+fn validate_encouragement_text(s: &str) -> Result<(), ValidationError> {
+    if s.trim().is_empty() {
+        Err(ValidationError::new("鼓励语内容不能为空"))
+    } else if s.chars().count() > 100 {
+        Err(ValidationError::new("鼓励语长度不能超过 100 字"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 校验用户可设置的鼓励语等级（预设专用 longest_streak 不开放给用户输入）
+fn validate_user_level(s: &str) -> Result<(), ValidationError> {
+    if ["normal", "advanced", "highlight", "celebration", "setback"].contains(&s) {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "等级必须为 normal/advanced/highlight/celebration/setback",
+        ))
+    }
+}
+
+/// 校验重复拆解频率
+fn validate_frequency(s: &str) -> Result<(), ValidationError> {
+    if ["daily", "weekly", "monthly"].contains(&s) {
+        Ok(())
+    } else {
+        Err(ValidationError::new("频率必须为 daily/weekly/monthly"))
+    }
+}
+
+/// 校验智能拆解策略
+fn validate_split_strategy(s: &str) -> Result<(), ValidationError> {
+    if ["by_deadline", "by_capacity", "by_date_range"].contains(&s) {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "拆解策略必须为 by_deadline/by_capacity/by_date_range",
+        ))
+    }
+}
+
+/// 校验周几列表（0=周日, 1-6=周一至周六）
+fn validate_weekdays(v: &Vec<u8>) -> Result<(), ValidationError> {
+    if v.len() > 7 || v.iter().any(|&d| d > 6) {
+        Err(ValidationError::new("weekdays 取值需在 0~6 且最多 7 个"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 校验每月几号列表（1-31）
+fn validate_month_days(v: &Vec<u8>) -> Result<(), ValidationError> {
+    if v.len() > 31 || v.iter().any(|&d| !(1..=31).contains(&d)) {
+        Err(ValidationError::new("month_days 取值需在 1~31"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 校验导入 JSON 大小（按字节数，上限 50MB）
+fn validate_import_size(s: &str) -> Result<(), ValidationError> {
+    if s.len() > MAX_IMPORT_JSON_BYTES {
+        Err(ValidationError::new("导入数据超过 50MB 上限"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 校验导入冲突模式
+fn validate_conflict_mode(s: &str) -> Result<(), ValidationError> {
+    if ["skip", "overwrite", "rename"].contains(&s) {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "冲突模式必须为 skip/overwrite/rename",
+        ))
+    }
+}
 
 /// 任务状态枚举（已废弃，保留用于未来类型安全重构）
 #[allow(dead_code)]
@@ -49,51 +180,66 @@ pub struct Goal {
 }
 
 /// 创建目标的输入参数
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateGoalInput {
+    #[validate(custom(function = "validate_name"))]
     pub name: String,
     /// 父目标 ID（None=总目标，Some=子目标）
     pub parent_id: Option<String>,
+    #[validate(custom(function = "validate_date_format"))]
     pub deadline: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
     pub total_qty: Option<f64>,
     pub unit: Option<String>,
     /// P1-3：每日可用时长（按时间预算拆解时使用）
     #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
     pub daily_capacity: Option<f64>,
 }
 
 /// 更新目标的输入参数
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct UpdateGoalInput {
     pub id: String,
+    #[validate(custom(function = "validate_name"))]
     pub name: Option<String>,
+    #[validate(custom(function = "validate_date_format"))]
     pub deadline: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
     pub total_qty: Option<f64>,
     pub unit: Option<String>,
     /// P1-3：每日可用时长（按时间预算拆解时使用）
     #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
     pub daily_capacity: Option<f64>,
 }
 
 /// 重复拆解输入（纯文字类任务：按频率重复 or 单次）
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct RepeatSplitInput {
     pub goal_id: String,
+    #[validate(custom(function = "validate_name"))]
     pub name: String,
     /// 起始日期 yyyy-MM-dd
+    #[validate(custom(function = "validate_date_format"))]
     pub start_date: String,
     /// 结束日期 yyyy-MM-dd（None 或等于 start_date → 单次任务）
+    #[validate(custom(function = "validate_date_format"))]
     pub end_date: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
     pub plan_qty: Option<f64>,
     pub unit: Option<String>,
     /// 频率：daily | weekly | monthly（None 或 daily → 每天重复）
     #[serde(default)]
+    #[validate(custom(function = "validate_frequency"))]
     pub frequency: Option<String>,
     /// 周几（0=周日, 1-6=周一至周六），仅 weekly 有效
     #[serde(default)]
+    #[validate(custom(function = "validate_weekdays"))]
     pub weekdays: Option<Vec<u8>>,
     /// 每月几号（1-31），仅 monthly 有效
     #[serde(default)]
+    #[validate(custom(function = "validate_month_days"))]
     pub month_days: Option<Vec<u8>>,
 }
 
@@ -105,28 +251,35 @@ pub struct RepeatSplitInput {
 /// - `by_date_range`：自定义日期范围（指定起止日期，可选每日数量）
 ///
 /// 所有参数可选字段均用于临时覆盖目标自身属性，不修改目标本身。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct SmartSplitInput {
     pub goal_id: String,
     /// 拆解策略：by_deadline | by_capacity | by_date_range
+    #[validate(custom(function = "validate_split_strategy"))]
     pub strategy: String,
     /// 总量（可选，默认用 goal.total_qty）
     #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
     pub total_qty: Option<f64>,
     /// 截止日期 yyyy-MM-dd（by_deadline / by_capacity 用，默认用 goal.deadline）
     #[serde(default)]
+    #[validate(custom(function = "validate_date_format"))]
     pub deadline: Option<String>,
     /// 每日可用时长（by_capacity 必填）
     #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
     pub daily_capacity: Option<f64>,
     /// 起始日期 yyyy-MM-dd（by_date_range 用，默认明天）
     #[serde(default)]
+    #[validate(custom(function = "validate_date_format"))]
     pub start_date: Option<String>,
     /// 结束日期 yyyy-MM-dd（by_date_range 用）
     #[serde(default)]
+    #[validate(custom(function = "validate_date_format"))]
     pub end_date: Option<String>,
     /// 每日数量（by_date_range 可选；不填则按天数均分总量）
     #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
     pub per_day_qty: Option<f64>,
 }
 
@@ -222,20 +375,24 @@ pub struct Task {
 }
 
 /// 创建任务的输入参数
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateTaskInput {
     pub goal_id: String,
     pub stage_id: Option<String>,
+    #[validate(custom(function = "validate_name"))]
     pub name: String,
+    #[validate(custom(function = "validate_date_format"))]
     pub plan_date: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
     pub plan_qty: Option<f64>,
     pub unit: Option<String>,
 }
 
 /// 完成任务的输入参数（支持部分完成）
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CompleteTaskInput {
     pub task_id: String,
+    #[validate(custom(function = "validate_qty"))]
     pub actual_qty: f64,
 }
 
@@ -244,11 +401,15 @@ pub struct CompleteTaskInput {
 /// PRD §4.2 模块二 & 分阶段计划 Sprint 2：
 /// - 支持修改任务名称、计划日期、计划数量
 /// - 修改 plan_qty 时自动标记 is_manual = 1（重新规划时保留）
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct UpdateTaskInput {
     pub task_id: String,
+    #[validate(custom(function = "validate_name"))]
     pub name: Option<String>,
+    /// 空串表示清除日期（宽松校验放行）
+    #[validate(custom(function = "validate_date_optional_clear"))]
     pub plan_date: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
     pub plan_qty: Option<f64>,
 }
 
@@ -434,10 +595,12 @@ pub struct Encouragement {
 }
 
 /// 添加鼓励语输入
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct AddEncouragementInput {
+    #[validate(custom(function = "validate_encouragement_text"))]
     pub text: String,
     /// 可选等级，默认 "normal"
+    #[validate(custom(function = "validate_user_level"))]
     pub level: Option<String>,
 }
 
@@ -491,9 +654,11 @@ pub struct Setting {
 }
 
 /// 设置项输入
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct SetSettingInput {
+    #[validate(length(min = 1, max = 100, message = "key 长度需在 1~100 个字符之间"))]
     pub key: String,
+    #[validate(length(max = 10000, message = "value 长度不能超过 10000 个字符"))]
     pub value: String,
 }
 
@@ -640,11 +805,13 @@ pub struct ExportData {
 }
 
 /// 导入数据输入
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct ImportInput {
     /// JSON 字符串
+    #[validate(custom(function = "validate_import_size"))]
     pub data: String,
     /// 冲突处理模式：skip | overwrite | rename
+    #[validate(custom(function = "validate_conflict_mode"))]
     pub conflict_mode: String,
 }
 

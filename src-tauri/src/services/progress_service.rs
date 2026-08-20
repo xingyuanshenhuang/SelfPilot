@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 
 use crate::db::helpers;
 use crate::db::models::{Goal, ProgressInfo};
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 
 /// 计算单个目标的进度（递归包含所有后代目标的任务）
 pub async fn calc_goal_progress(pool: &SqlitePool, goal_id: &str) -> AppResult<ProgressInfo> {

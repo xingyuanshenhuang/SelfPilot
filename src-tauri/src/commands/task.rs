@@ -9,10 +9,14 @@ use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use crate::services::dependency_service;
+use validator::Validate;
 
 /// 手动创建任务
 #[tauri::command]
 pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> AppResult<Task> {
+    // S-05 (SEC-M-05)：入参校验（名称长度、日期格式、数量非负有限）
+    input.validate()?;
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
     let plan_qty = input.plan_qty.unwrap_or(1.0);
@@ -61,6 +65,9 @@ pub async fn complete_task(
     input: CompleteTaskInput,
     state: State<'_, DbPool>,
 ) -> AppResult<Task> {
+    // S-05 (SEC-M-05)：入参校验（实际完成量非负有限）
+    input.validate()?;
+
     if input.actual_qty < 0.0 {
         return Err(AppError::Param("实际完成量不能为负".into()));
     }
@@ -437,6 +444,9 @@ pub async fn update_task_plan_qty(
 /// - 修改 plan_qty 时若任务已完成(actual_qty > plan_qty)则截断 actual_qty
 #[tauri::command]
 pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> AppResult<Task> {
+    // S-05 (SEC-M-05)：入参校验（名称长度、日期格式、数量非负有限）
+    input.validate()?;
+
     let task: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&input.task_id)
         .fetch_optional(&state.0)
@@ -566,6 +576,14 @@ pub async fn delete_tasks_batch(
     task_ids: Vec<String>,
     state: State<'_, DbPool>,
 ) -> AppResult<DeleteTasksBatchResult> {
+    // S-05 (SEC-M-05)：批量操作数组长度上限
+    if task_ids.len() > crate::db::models::MAX_BATCH_SIZE {
+        return Err(AppError::Param(format!(
+            "批量操作一次最多 {} 条",
+            crate::db::models::MAX_BATCH_SIZE
+        )));
+    }
+
     if task_ids.is_empty() {
         return Ok(DeleteTasksBatchResult {
             deleted_count: 0,

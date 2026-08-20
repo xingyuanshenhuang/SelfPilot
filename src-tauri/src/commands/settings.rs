@@ -1,4 +1,5 @@
 use tauri::State;
+use validator::Validate;
 
 use crate::db::models::{
     EncouragementSettings, SetSettingInput, Setting, UpdateEncouragementSettingsInput,
@@ -32,6 +33,9 @@ pub async fn get_setting(
 /// 设置某个值（upsert）
 #[tauri::command]
 pub async fn set_setting(input: SetSettingInput, state: State<'_, DbPool>) -> AppResult<()> {
+    // S-05 (SEC-M-05)：入参校验（key/value 长度上限）
+    input.validate()?;
+
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
