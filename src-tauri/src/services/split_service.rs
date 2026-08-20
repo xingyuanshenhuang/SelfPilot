@@ -1,6 +1,6 @@
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
-use uuid::Uuid;
+use crate::util::{new_uuid, now_local_ts, parse_date_or_param};
 
 use crate::db::models::{
     Goal, ReplanPreview, ReplanPreviewItem, RepeatSplitInput, SmartSplitInput, Task,
@@ -20,8 +20,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
         AppError::Param("目标未设置截止日期，无法拆解".into())
     })?;
 
-    let deadline = NaiveDate::parse_from_str(deadline_str, "%Y-%m-%d")
-        .map_err(|e| AppError::Param(format!("截止日期格式错误: {}", e)))?;
+    let deadline = parse_date_or_param(deadline_str, "截止日期")?;
 
     let remaining_days = (deadline - today).num_days();
     if remaining_days < 1 {
@@ -40,7 +39,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
     let base = (total / remaining_days as f64).floor();
     let remainder = (total - base * remaining_days as f64).round() as i64;
 
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let now = now_local_ts();
     let mut tasks = Vec::new();
     let mut day_index = 0;
 
@@ -54,7 +53,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
 
         day_index += 1;
         let task_date = today + chrono::Duration::days(i + 1); // 从明天开始
-        let task_id = Uuid::new_v4().to_string();
+        let task_id = new_uuid();
         let path = format!("/{}/{}", goal.id, task_id);
 
         tasks.push(Task {
@@ -93,8 +92,7 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
     let deadline_str = goal.deadline.as_ref().ok_or_else(|| {
         AppError::Param("目标未设置截止日期，无法拆解".into())
     })?;
-    let deadline = NaiveDate::parse_from_str(deadline_str, "%Y-%m-%d")
-        .map_err(|e| AppError::Param(format!("截止日期格式错误: {}", e)))?;
+    let deadline = parse_date_or_param(deadline_str, "截止日期")?;
 
     let remaining_days = (deadline - today).num_days();
     if remaining_days < 1 {
@@ -130,7 +128,7 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
         )));
     }
 
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let now = now_local_ts();
     let mut tasks = Vec::new();
     let mut allocated = 0.0;
 
@@ -141,7 +139,7 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
         allocated += plan_qty;
 
         let task_date = today + chrono::Duration::days(i + 1); // 从明天开始
-        let task_id = Uuid::new_v4().to_string();
+        let task_id = new_uuid();
         let path = format!("/{}/{}", goal.id, task_id);
 
         tasks.push(Task {
@@ -203,7 +201,7 @@ pub fn split_by_date_range(
         )));
     }
 
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let now = now_local_ts();
     let mut tasks = Vec::new();
 
     match per_day_qty {
@@ -225,7 +223,7 @@ pub fn split_by_date_range(
                 let plan_qty = remaining.min(qty);
                 allocated += plan_qty;
                 let task_date = start_date + chrono::Duration::days(i);
-                let task_id = Uuid::new_v4().to_string();
+                let task_id = new_uuid();
                 let path = format!("/{}/{}", goal.id, task_id);
                 tasks.push(Task {
                     id: task_id,
@@ -259,7 +257,7 @@ pub fn split_by_date_range(
                     continue;
                 }
                 let task_date = start_date + chrono::Duration::days(i);
-                let task_id = Uuid::new_v4().to_string();
+                let task_id = new_uuid();
                 let path = format!("/{}/{}", goal.id, task_id);
                 day_index += 1;
                 tasks.push(Task {
@@ -372,8 +370,7 @@ pub fn build_replan_preview(
     let deadline_str = goal.deadline.as_ref().ok_or_else(|| {
         AppError::Param("目标未设置截止日期，无法重新规划".into())
     })?;
-    let deadline = NaiveDate::parse_from_str(deadline_str, "%Y-%m-%d")
-        .map_err(|e| AppError::Param(format!("截止日期格式错误: {}", e)))?;
+    let deadline = parse_date_or_param(deadline_str, "截止日期")?;
 
     let remaining_days = (deadline - today).num_days();
     if remaining_days < 1 {
@@ -509,7 +506,7 @@ pub fn split_repeat_tasks(
 
     let plan_qty = input.plan_qty.unwrap_or(1.0);
     let unit = input.unit.clone().unwrap_or_default();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let now = now_local_ts();
 
     // 判断是否重复
     let end = match &input.end_date {
@@ -584,7 +581,7 @@ pub fn split_repeat_tasks(
     while cursor <= end {
         if should_generate(cursor) {
             seq_index += 1;
-            let task_id = Uuid::new_v4().to_string();
+            let task_id = new_uuid();
             let path = format!("/{}/{}", goal.id, task_id);
 
             let name = if is_single {

@@ -7,6 +7,7 @@ use crate::db::models::{
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+use crate::util::{new_uuid, now_local_ts};
 
 /// S-05 (SEC-M-06)：导入数据允许的 settings key 白名单
 ///
@@ -163,9 +164,8 @@ pub async fn export_data(state: State<'_, DbPool>) -> AppResult<String> {
 
     let data = ExportData {
         version: "2.1".to_string(),
-        exported_at: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+        exported_at: now_local_ts(),
         goals,
-        stages: vec![], // 已废弃，保留字段兼容旧备份
         tasks,
         task_dependencies,
         encouragements,
@@ -262,7 +262,7 @@ pub async fn import_data(
             (true, "skip") => (g.id.clone(), "skip"),
             (true, "overwrite") => (g.id.clone(), "overwrite"),
             (true, "rename") => {
-                let new_id = uuid::Uuid::new_v4().to_string();
+                let new_id = new_uuid();
                 goal_id_map.insert(g.id.clone(), new_id.clone());
                 (new_id, "rename")
             }
@@ -339,7 +339,7 @@ pub async fn import_data(
             (false, _) => (t.id.clone(), "import"),
             (true, "skip") => (t.id.clone(), "skip"),
             (true, "overwrite") => (t.id.clone(), "overwrite"),
-            (true, "rename") => (uuid::Uuid::new_v4().to_string(), "rename"),
+            (true, "rename") => (new_uuid(), "rename"),
             _ => (t.id.clone(), "skip"),
         };
 
@@ -450,7 +450,7 @@ pub async fn import_data(
         }
 
         let id = if exists && mode == "rename" {
-            uuid::Uuid::new_v4().to_string()
+            new_uuid()
         } else {
             d.id.clone()
         };
@@ -481,7 +481,7 @@ pub async fn import_data(
             .is_some();
 
         let id = if exists && mode == "rename" {
-            uuid::Uuid::new_v4().to_string()
+            new_uuid()
         } else if exists && mode == "skip" {
             continue;
         } else {

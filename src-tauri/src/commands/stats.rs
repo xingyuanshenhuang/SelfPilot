@@ -7,6 +7,17 @@ use crate::db::models::{
 use crate::db::DbPool;
 use crate::error::AppResult;
 
+/// R-08 (DUP-B-07)：生成 [start, end] 闭区间内的所有日期（每次递增一天）
+///
+/// 用于图表类统计的日期填充，避免三处内联 while 循环重复。
+fn fill_date_range(
+    start: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+) -> impl Iterator<Item = chrono::NaiveDate> {
+    let total = (end - start).num_days();
+    (0..=total).map(move |d| start + chrono::Duration::days(d))
+}
+
 /// 获取近 N 天每日完成趋势
 ///
 /// PRD §4.2 模块六 & 分阶段计划 Sprint 3：
@@ -60,8 +71,8 @@ pub async fn get_completion_trend(
 
     // 填充无任务的日期（趋势线连续）
     let mut result: Vec<DailyTrend> = Vec::with_capacity(days as usize);
-    for i in 0..days {
-        let date = (start_date + chrono::Duration::days(i)).format("%Y-%m-%d").to_string();
+    for cursor in fill_date_range(start_date, today) {
+        let date = cursor.format("%Y-%m-%d").to_string();
         let (completed_qty, completed_count) = daily_map.remove(&date).unwrap_or((0.0, 0));
         result.push(DailyTrend {
             date,
@@ -159,8 +170,7 @@ pub async fn get_heatmap(
         .map_err(|e| crate::error::AppError::Param(format!("结束日期格式错误: {}", e)))?;
 
     let mut result: Vec<HeatmapCell> = Vec::new();
-    let mut cursor = start;
-    while cursor <= end {
+    for cursor in fill_date_range(start, end) {
         let date_str = cursor.format("%Y-%m-%d").to_string();
         let (plan_qty, completed_qty, task_count, done_count) =
             daily_map.remove(&date_str).unwrap_or((0.0, 0.0, 0, 0));
@@ -177,7 +187,6 @@ pub async fn get_heatmap(
             done_count,
             completion_rate,
         });
-        cursor = cursor + chrono::Duration::days(1);
     }
 
     Ok(result)
@@ -465,8 +474,7 @@ pub async fn get_daily_load(
         .map_err(|e| crate::error::AppError::Param(format!("结束日期格式错误: {}", e)))?;
 
     let mut result = Vec::new();
-    let mut cursor = start;
-    while cursor <= end {
+    for cursor in fill_date_range(start, end) {
         let date_str = cursor.format("%Y-%m-%d").to_string();
         let (total_tasks, total_qty, by_goal) =
             daily_map.remove(&date_str).unwrap_or((0, 0.0, Vec::new()));
@@ -476,7 +484,6 @@ pub async fn get_daily_load(
             total_qty,
             by_goal,
         });
-        cursor += chrono::Duration::days(1);
     }
     Ok(result)
 }

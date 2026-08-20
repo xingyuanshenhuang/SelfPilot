@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod error;
 mod services;
+mod util;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;

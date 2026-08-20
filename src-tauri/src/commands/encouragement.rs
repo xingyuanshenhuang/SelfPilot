@@ -1,7 +1,7 @@
 use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use uuid::Uuid;
+use crate::util::{new_uuid, now_local_ts};
 
 use crate::db::models::{
     AddEncouragementInput, Encouragement, EncouragementTriggerSource, LaggingGoal,
@@ -292,10 +292,8 @@ async fn log_show(
     encouragement_id: &str,
     trigger_source: &str,
 ) -> AppResult<()> {
-    let log_id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now()
-        .format("%Y-%m-%dT%H:%M:%S%.3f")
-        .to_string();
+    let log_id = new_uuid();
+    let now = now_local_ts();
     sqlx::query(
         "INSERT INTO encouragement_show_log (id, encouragement_id, shown_at, trigger_source) VALUES (?, ?, ?, ?)",
     )
@@ -350,10 +348,8 @@ pub async fn add_encouragement(
         return Err(AppError::Business("该鼓励语已存在".into()));
     }
 
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now()
-        .format("%Y-%m-%dT%H:%M:%S")
-        .to_string();
+    let id = new_uuid();
+    let now = now_local_ts();
 
     // P3-5：计算当前最大 sort_order + 1，确保新增项排到最后
     let max_sort_order: Option<i64> = sqlx::query_scalar(
@@ -946,8 +942,8 @@ pub async fn toggle_favorite(id: String, state: State<'_, DbPool>) -> AppResult<
         Ok(false)
     } else {
         // 未收藏，添加收藏
-        let favorite_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let favorite_id = new_uuid();
+        let now = now_local_ts();
         sqlx::query(
             "INSERT INTO encouragement_favorites (id, encouragement_id, favorited_at) VALUES (?, ?, ?)",
         )
@@ -998,7 +994,7 @@ pub async fn log_encouragement_close(
     view_duration: i64,
     state: State<'_, DbPool>,
 ) -> AppResult<()> {
-    let closed_at = chrono::Utc::now().to_rfc3339();
+    let closed_at = now_local_ts();
 
     // 更新最新的展示记录
     sqlx::query(
@@ -1129,8 +1125,8 @@ pub async fn random_longest_streak_encouragement(
 
     // 记录展示日志
     if let Some(ref e) = enc {
-        let log_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let log_id = new_uuid();
+        let now = now_local_ts();
         sqlx::query(
             "INSERT INTO encouragement_show_log (id, encouragement_id, shown_at, trigger_source) VALUES (?, ?, ?, ?)",
         )

@@ -55,7 +55,7 @@ export const useSettingStore = defineStore(
     // 前端持久化作为快速启动缓存，后端为权威源
     persist: {
       key: "selfpilot-settings",
-      paths: ["theme"],
+      pick: ["theme"],
     },
   },
 );

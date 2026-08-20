@@ -131,37 +131,6 @@ fn validate_conflict_mode(s: &str) -> Result<(), ValidationError> {
     }
 }
 
-/// 任务状态枚举（已废弃，保留用于未来类型安全重构）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskStatus {
-    Pending,
-    Partial,
-    Done,
-    Skipped,
-}
-
-impl TaskStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TaskStatus::Pending => "pending",
-            TaskStatus::Partial => "partial",
-            TaskStatus::Done => "done",
-            TaskStatus::Skipped => "skipped",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(TaskStatus::Pending),
-            "partial" => Some(TaskStatus::Partial),
-            "done" => Some(TaskStatus::Done),
-            "skipped" => Some(TaskStatus::Skipped),
-            _ => None,
-        }
-    }
-}
-
 /// 目标（树节点：parent_id=NULL 为总目标，否则为子目标）
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Goal {
@@ -291,63 +260,6 @@ pub struct GoalTreeNode {
     pub tasks: Vec<Task>,
     pub progress: f64,
     pub is_completed: bool,
-}
-
-/// 阶段（已废弃，仅用于旧版数据备份兼容）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Stage {
-    pub id: String,
-    pub goal_id: String,
-    pub name: String,
-    pub parent_id: Option<String>,
-    pub path: String,
-    pub sort_order: i64,
-    pub created_at: String,
-}
-
-/// 创建阶段的输入参数（已废弃）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateStageInput {
-    pub goal_id: String,
-    pub name: String,
-    pub parent_id: Option<String>,
-}
-
-/// 更新阶段的输入参数（已废弃）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct UpdateStageInput {
-    pub id: String,
-    pub name: Option<String>,
-    pub sort_order: Option<i64>,
-}
-
-/// 删除阶段时子任务的处理方式（已废弃）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct DeleteStageInput {
-    pub id: String,
-    /// "detach" 子任务转为独立任务；"cascade" 级联删除子任务
-    pub mode: String,
-}
-
-/// 阶段带进度信息（已废弃）
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct StageWithProgress {
-    pub id: String,
-    pub goal_id: String,
-    pub name: String,
-    pub parent_id: Option<String>,
-    pub path: String,
-    pub sort_order: i64,
-    pub created_at: String,
-    pub total_plan: f64,
-    pub total_actual: f64,
-    pub percentage: f64,
-    pub task_count: i64,
 }
 
 /// 任务（三级节点，实际执行单元）
@@ -604,27 +516,6 @@ pub struct AddEncouragementInput {
     pub level: Option<String>,
 }
 
-/// P3-2：鼓励语收藏
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct EncouragementFavorite {
-    pub id: String,
-    pub encouragement_id: String,
-    pub favorited_at: String,
-}
-
-/// P3-3：鼓励语展示日志（含用户行为）
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct EncouragementShowLog {
-    pub id: String,
-    pub encouragement_id: String,
-    pub shown_at: String,
-    pub trigger_source: String,
-    /// 关闭时间（可选）
-    pub closed_at: Option<String>,
-    /// 观看时长（秒）
-    pub view_duration: Option<i64>,
-}
-
 /// 更新鼓励语输入（P0-5：补齐编辑功能）
 ///
 /// 仅自定义文案可修改；预设文案拒绝修改。
@@ -636,14 +527,6 @@ pub struct UpdateEncouragementInput {
     pub text: Option<String>,
     /// 可选新等级：normal | advanced | highlight | celebration | setback
     pub level: Option<String>,
-}
-
-/// 更新鼓励语情境标签输入（P2-1）
-#[derive(Debug, Clone, Deserialize)]
-pub struct UpdateEncouragementContextInput {
-    pub id: String,
-    /// 情境标签 JSON 字符串
-    pub context_tags: String,
 }
 
 /** 设置项（key-value） */
@@ -795,7 +678,6 @@ pub struct ExportData {
     pub version: String,
     pub exported_at: String,
     pub goals: Vec<Goal>,
-    pub stages: Vec<Stage>,
     pub tasks: Vec<Task>,
     /// P1-1：任务依赖关系（兼容旧备份：缺失时默认为空数组）
     #[serde(default)]

@@ -21,7 +21,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1"
+thiserror = "2"
 rand = "0.8"
 # S-04 (SEC-M-04)：错误脱敏 + 结构化日志
 tracing = "0.1"

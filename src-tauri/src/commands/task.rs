@@ -1,5 +1,5 @@
 use tauri::State;
-use uuid::Uuid;
+use crate::util::{new_uuid, now_local_ts};
 
 use crate::db::models::{
     CalendarTask, CompleteTaskInput, CreateTaskInput, DeleteTaskResult, DeleteTasksBatchResult,
@@ -17,8 +17,8 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
     // S-05 (SEC-M-05)：入参校验（名称长度、日期格式、数量非负有限）
     input.validate()?;
 
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let id = new_uuid();
+    let now = now_local_ts();
     let plan_qty = input.plan_qty.unwrap_or(1.0);
     let unit = input.unit.unwrap_or_default();
     let path = format!("/{}/{}", input.goal_id, id);
@@ -719,8 +719,8 @@ pub async fn set_task_dependency(
         ));
     }
 
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let id = new_uuid();
+    let now = now_local_ts();
     // 重复依赖静默忽略
     sqlx::query(
         "INSERT OR IGNORE INTO task_dependencies (id, task_id, depends_on_id, created_at)

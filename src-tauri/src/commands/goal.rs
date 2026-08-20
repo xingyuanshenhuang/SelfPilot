@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tauri::State;
-use uuid::Uuid;
+use crate::util::{new_uuid, now_local_ts};
 
 use crate::db::models::{
     CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
@@ -20,8 +20,8 @@ pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> Ap
     // S-05 (SEC-M-05)：入参校验（名称长度、日期格式、数量非负有限）
     input.validate()?;
 
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let id = new_uuid();
+    let now = now_local_ts();
     let total_qty = input.total_qty.unwrap_or(0.0);
     let unit = input.unit.unwrap_or_default();
 

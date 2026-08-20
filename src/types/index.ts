@@ -396,8 +396,6 @@ export interface ExportData {
   version: string;
   exported_at: string;
   goals: Goal[];
-  /** 已废弃，保留用于旧版备份兼容 */
-  stages: unknown[];
   tasks: Task[];
   encouragements: Encouragement[];
   settings: Setting[];
