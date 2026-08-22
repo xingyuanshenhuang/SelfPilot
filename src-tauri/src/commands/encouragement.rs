@@ -706,23 +706,28 @@ pub async fn get_setback_situation(
     // 2. 进度滞后检测
     // ============================================================
 
-    // 查询所有活跃目标及其预测完成日期
-    let predictions: Vec<(String, String, Option<String>, Option<String>, Option<i64>)> =
-        sqlx::query_as(
-            "SELECT g.id, g.name, g.deadline, gp.predicted_date, gp.days_to_deadline
-             FROM goals g
-             LEFT JOIN goal_progress gp ON g.id = gp.goal_id
-             WHERE g.status = 'active' AND g.parent_id IS NULL",
-        )
-        .fetch_all(&state.0)
-        .await?;
+    // 查询所有活跃根目标（进度滞后检测仅关注活跃目标）
+    use std::collections::HashSet;
+    let active_roots: HashSet<String> = sqlx::query_scalar(
+        "SELECT id FROM goals WHERE status = 'active' AND parent_id IS NULL",
+    )
+    .fetch_all(&state.0)
+    .await?
+    .into_iter()
+    .collect();
+
+    // 复用运行时完成预测，替代原 JOIN 不存在的 goal_progress 表
+    // （goal_progress 表从未被迁移创建，原实现每次调用报 "no such table: goal_progress"
+    //   且进度滞后检测静默失效；现基于 stats 完成预测在运行时计算 predicted_date）
+    let predictions = crate::commands::stats::calc_completion_predictions(&state.0).await?;
 
     let lagging_goals: Vec<LaggingGoal> = predictions
         .iter()
-        .filter_map(|(id, name, deadline, predicted, days_remaining)| {
+        .filter(|p| active_roots.contains(&p.goal_id))
+        .filter_map(|p| {
             // 必须有截止日期和预测日期
-            let deadline = deadline.as_ref()?;
-            let predicted = predicted.as_ref()?;
+            let deadline = p.deadline.as_ref()?;
+            let predicted = p.predicted_date.as_ref()?;
 
             // 解析日期
             let dl = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").ok()?;
@@ -731,11 +736,11 @@ pub async fn get_setback_situation(
             // 预测日期 > 截止日期 = 滞后
             if pred > dl {
                 Some(LaggingGoal {
-                    id: id.clone(),
-                    name: name.clone(),
+                    id: p.goal_id.clone(),
+                    name: p.goal_name.clone(),
                     deadline: deadline.clone(),
                     predicted_end_date: predicted.clone(),
-                    days_remaining: days_remaining.unwrap_or(0) as i32,
+                    days_remaining: p.days_to_deadline.unwrap_or(0) as i32,
                 })
             } else {
                 None

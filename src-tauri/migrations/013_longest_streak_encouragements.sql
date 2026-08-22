@@ -32,13 +32,12 @@ CREATE TABLE IF NOT EXISTS encouragements_new (
     created_at TEXT NOT NULL,
     context_tags TEXT DEFAULT '{}',
     hidden INTEGER DEFAULT 0,
-    weight REAL DEFAULT 1.0,
-    sort_order INTEGER DEFAULT 0
+    weight REAL DEFAULT 1.0
 );
 
 -- 2. 使用 INSERT OR REPLACE 复制数据（幂等）
-INSERT OR REPLACE INTO encouragements_new (id, text, category, level, created_at, context_tags, hidden, weight, sort_order)
-SELECT id, text, category, level, created_at, context_tags, hidden, weight, sort_order FROM encouragements;
+INSERT OR REPLACE INTO encouragements_new (id, text, category, level, created_at, context_tags, hidden)
+SELECT id, text, category, level, created_at, context_tags, hidden FROM encouragements;
 
 -- 3. 删除旧表
 DROP TABLE encouragements;

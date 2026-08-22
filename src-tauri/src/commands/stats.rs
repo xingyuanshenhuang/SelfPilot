@@ -200,9 +200,9 @@ pub async fn get_heatmap(
 /// - remaining_qty = total_qty - completed_qty
 /// - predicted_days = remaining_qty / avg_daily_speed
 /// - 与 deadline 比较给出状态和建议
-#[tauri::command]
-pub async fn get_completion_predictions(
-    state: State<'_, DbPool>,
+/// 计算所有根目标的完成预测（R：从 `get_completion_predictions` 提取，供鼓励语进度滞后检测等复用）
+pub async fn calc_completion_predictions(
+    pool: &sqlx::SqlitePool,
 ) -> AppResult<Vec<CompletionPrediction>> {
     let today = chrono::Local::now().date_naive();
     let seven_days_ago = today - chrono::Duration::days(6); // 含今天共7天
@@ -213,7 +213,7 @@ pub async fn get_completion_predictions(
     let goals: Vec<(String, String, Option<String>, f64)> = sqlx::query_as(
         "SELECT id, name, deadline, total_qty FROM goals WHERE parent_id IS NULL ORDER BY created_at",
     )
-    .fetch_all(&state.0)
+    .fetch_all(pool)
     .await?;
 
     // 2. 查询每个目标的已完成量
@@ -221,7 +221,7 @@ pub async fn get_completion_predictions(
         "SELECT goal_id, CAST(COALESCE(SUM(actual_qty), 0) AS REAL) FROM tasks
          WHERE status != 'skipped' GROUP BY goal_id",
     )
-    .fetch_all(&state.0)
+    .fetch_all(pool)
     .await?;
 
     use std::collections::HashMap;
@@ -240,7 +240,7 @@ pub async fn get_completion_predictions(
     )
     .bind(&start_str)
     .bind(&end_str)
-    .fetch_all(&state.0)
+    .fetch_all(pool)
     .await?;
 
     // goal_id -> 总完成量（过去7天）
@@ -420,6 +420,17 @@ pub async fn get_completion_predictions(
     }
 
     Ok(predictions)
+}
+
+/// 获取各目标完成预测
+///
+/// PRD §4.2 模块六 & 分阶段计划 Sprint 6：基于近 7 天均速预测每个根目标的完成日期，
+/// 并与截止日期比较给出状态（on_track / ahead / need_speed / no_deadline / no_data / completed）。
+#[tauri::command]
+pub async fn get_completion_predictions(
+    state: State<'_, DbPool>,
+) -> AppResult<Vec<CompletionPrediction>> {
+    calc_completion_predictions(&state.0).await
 }
 
 /// 获取日期范围内每日负载（按目标分组）— P2-5 跨目标负载平衡
