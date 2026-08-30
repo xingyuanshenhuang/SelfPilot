@@ -258,7 +258,7 @@ async function handleNativeRestore() {
    - 重启后数据完整（目标、任务、依赖、鼓励语、设置都在）
 
 3. **安全网验证**：
-   - 恢复后检查 `%APPDATA%\com.selfpilot.app\selfpilot.db.before_restore` 文件存在
+   - 恢复后检查 `%APPDATA%\com.selfpilot.desktop\selfpilot.db.before_restore` 文件存在
 
 4. **错误场景**：
    - 选择非 .db 文件 → 后端返回参数错误

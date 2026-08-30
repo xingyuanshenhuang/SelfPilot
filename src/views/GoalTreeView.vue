@@ -22,6 +22,7 @@ import {
 import type { DataTableColumns, DropdownOption } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { useGoalStore } from "@/stores/goalStore";
+import { useTaskStore } from "@/stores/taskStore";
 import * as taskApi from "@/api/task";
 import * as goalApi from "@/api/goal";
 import * as statsApi from "@/api/stats";
@@ -45,6 +46,7 @@ import GoalTreeNodeItem, {
 } from "@/components/GoalTreeNodeItem.vue";
 
 const goalStore = useGoalStore();
+const taskStore = useTaskStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -854,7 +856,7 @@ async function openEditTaskModal(task: Task) {
 // ===== 任务操作 =====
 async function handleCompleteTask(task: Task) {
   try {
-    const updated = await taskApi.completeTask({
+    const updated = await taskStore.completeTask({
       task_id: task.id,
       actual_qty: task.plan_qty,
     });
@@ -891,7 +893,7 @@ function openBackfillModal(task: Task) {
 
 async function handleConfirmBackfill() {
   try {
-    const updated = await taskApi.backfillTask({
+    const updated = await taskStore.backfillTask({
       task_id: backfillForm.task_id,
       actual_qty: backfillForm.actual_qty,
     });

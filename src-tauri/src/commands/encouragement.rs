@@ -47,23 +47,17 @@ fn get_current_time_period() -> &'static str {
     }
 }
 
-/// 从指定等级桶中随机抽取一条，排除指定 ids（P0-3 + P2-3：时段过滤 + P3-1：加权随机）
-async fn pick_by_level(
+/// 查询指定条件下的候选文案（可选 style / 时段过滤）
+async fn fetch_candidates(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     level: &str,
+    style: Option<&str>,
+    period: Option<&str>,
     exclude_ids: &[String],
-) -> AppResult<Option<Encouragement>> {
-    // P2-3：获取当前时段
-    let time_period = get_current_time_period();
-
-    // P3-1：查询最近5条展示记录（用于惩罚）
-    let recent_shown: Vec<String> = sqlx::query_scalar(
-        "SELECT encouragement_id FROM encouragement_show_log ORDER BY shown_at DESC LIMIT 5"
-    )
-    .fetch_all(&mut **tx)
-    .await?;
-
-    // P3-1：查询所有候选文案（包含展示次数、收藏状态）
+) -> AppResult<Vec<CandidateWithStats>> {
+    // 注意：QueryBuilder 不会解析 SQL 字符串中的 `?` 占位符，
+    // push_bind 会在 SQL 末尾追加占位符，因此初始 SQL 中不能写字面 `?`，
+    // 否则会生成 `= ??`、`LIKE ??` 这类非法 SQL 导致 "near \"?\": syntax error"。
     let mut builder = QueryBuilder::<sqlx::Sqlite>::new(
         r#"
         SELECT
@@ -73,13 +67,19 @@ async fn pick_by_level(
         FROM encouragements e
         LEFT JOIN encouragement_show_log l ON e.id = l.encouragement_id
         LEFT JOIN encouragement_favorites f ON e.id = f.encouragement_id
-        WHERE e.level = ?
-        AND e.hidden = 0
-        AND e.context_tags LIKE ?
-        "#
+        WHERE e.hidden = 0
+        "#,
     );
+    builder.push(" AND e.level = ");
     builder.push_bind(level);
-    builder.push_bind(format!("%\"time\":\"{}\"", time_period));
+    if let Some(s) = style {
+        builder.push(" AND e.style = ");
+        builder.push_bind(s);
+    }
+    if let Some(p) = period {
+        builder.push(" AND e.context_tags LIKE ");
+        builder.push_bind(format!("%\"time\":\"{}\"", p));
+    }
     if !exclude_ids.is_empty() {
         builder.push(" AND e.id NOT IN (");
         let mut sep = builder.separated(", ");
@@ -94,46 +94,53 @@ async fn pick_by_level(
         .build_query_as::<CandidateWithStats>()
         .fetch_all(&mut **tx)
         .await?;
+    Ok(candidates)
+}
 
-    // 如果没有时段匹配的候选，降级为无标签文案
-    if candidates.is_empty() {
-        let mut builder = QueryBuilder::<sqlx::Sqlite>::new(
-            r#"
-            SELECT
-                e.*,
-                COUNT(DISTINCT l.id) as show_count,
-                CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
-            FROM encouragements e
-            LEFT JOIN encouragement_show_log l ON e.id = l.encouragement_id
-            LEFT JOIN encouragement_favorites f ON e.id = f.encouragement_id
-            WHERE e.level = ?
-            AND e.hidden = 0
-            "#
-        );
-        builder.push_bind(level);
-        if !exclude_ids.is_empty() {
-            builder.push(" AND e.id NOT IN (");
-            let mut sep = builder.separated(", ");
-            for id in exclude_ids {
-                sep.push_bind(id);
-            }
-            builder.push(")");
+/// 判断候选是否需要按风格（style）过滤并抽取
+///
+/// 尝试顺序：① 风格+时段 → ② 风格 → ③ 无风格（回退 warm 等既有文案）
+/// F4：支持"文案风格"设置，确保不同风格取到不同口吻的文案
+async fn pick_by_level(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    level: &str,
+    exclude_ids: &[String],
+    style: Option<&str>,
+) -> AppResult<Option<Encouragement>> {
+    // P2-3：获取当前时段
+    let time_period = get_current_time_period();
+
+    // P3-1：查询最近5条展示记录（用于惩罚）
+    let recent_shown: Vec<String> = sqlx::query_scalar(
+        "SELECT encouragement_id FROM encouragement_show_log ORDER BY shown_at DESC LIMIT 5"
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let combos: Vec<(Option<&str>, Option<&str>)> = match style {
+        Some(s) => {
+            vec![(Some(s), Some(time_period)), (Some(s), None), (None, None)]
         }
-        builder.push(" GROUP BY e.id");
+        None => vec![(None, Some(time_period)), (None, None)],
+    };
 
-        let fallback_candidates: Vec<CandidateWithStats> = builder
-            .build_query_as::<CandidateWithStats>()
-            .fetch_all(&mut **tx)
-            .await?;
-
-        if fallback_candidates.is_empty() {
-            return Ok(None);
+    for (style_f, period_f) in combos {
+        let candidates = fetch_candidates(tx, level, style_f, period_f, exclude_ids).await?;
+        if !candidates.is_empty() {
+            return Ok(Some(weighted_random_pick(candidates, &recent_shown)?));
         }
-
-        return Ok(Some(weighted_random_pick(fallback_candidates, &recent_shown)?));
     }
 
-    Ok(Some(weighted_random_pick(candidates, &recent_shown)?))
+    Ok(None)
+}
+
+/// 读取用户当前文案风格设置，默认 "warm"
+async fn current_style(pool: &sqlx::SqlitePool) -> AppResult<String> {
+    let style: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'encouragement_style'")
+            .fetch_optional(pool)
+            .await?;
+    Ok(style.unwrap_or_else(|| "warm".to_string()))
 }
 
 /// P3-1：候选文案（包含统计信息）
@@ -147,6 +154,7 @@ struct CandidateWithStats {
     context_tags: Option<String>,
     hidden: Option<i32>,
     sort_order: Option<i64>,
+    style: String,
     show_count: i64,
     is_favorite: i64,
 }
@@ -217,6 +225,7 @@ fn weighted_random_pick(
                 context_tags: candidate.context_tags.clone(),
                 hidden: candidate.hidden,
                 sort_order: candidate.sort_order,
+                style: candidate.style.clone(),
             });
         }
     }
@@ -235,6 +244,7 @@ fn weighted_random_pick(
         context_tags: last.context_tags.clone(),
         hidden: last.hidden,
         sort_order: last.sort_order,
+        style: last.style.clone(),
     })
 }
 
@@ -265,9 +275,10 @@ async fn random_with_fallback(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     levels: &[&str],
     exclude_ids: &[String],
+    style: Option<&str>,
 ) -> AppResult<Option<Encouragement>> {
     for level in levels {
-        if let Some(item) = pick_by_level(tx, level, exclude_ids).await? {
+        if let Some(item) = pick_by_level(tx, level, exclude_ids, style).await? {
             return Ok(Some(item));
         }
     }
@@ -527,6 +538,9 @@ pub async fn random_encouragement_by_streak(
 
     let exclude_ids = recent_shown_ids(&mut tx).await?;
 
+    // F4：读取当前文案风格，用于按风格过滤
+    let style = current_style(&state.0).await?;
+
     // 确定目标等级
     let target_level = if streak >= 7 {
         "highlight"
@@ -543,7 +557,7 @@ pub async fn random_encouragement_by_streak(
         vec![target_level, "normal"]
     };
 
-    let item = random_with_fallback(&mut tx, &levels, &exclude_ids).await?;
+    let item = random_with_fallback(&mut tx, &levels, &exclude_ids, Some(&style)).await?;
 
     // 全库兜底
     let item = match item {
@@ -577,9 +591,12 @@ pub async fn random_celebration_encouragement(
 
     let exclude_ids = recent_shown_ids(&mut tx).await?;
 
+    // F4：读取当前文案风格，用于按风格过滤
+    let style = current_style(&state.0).await?;
+
     // 逐级降级：celebration → highlight → advanced → normal
     let levels = vec!["celebration", "highlight", "advanced", "normal"];
-    let item = random_with_fallback(&mut tx, &levels, &exclude_ids).await?;
+    let item = random_with_fallback(&mut tx, &levels, &exclude_ids, Some(&style)).await?;
 
     // 全库兜底
     let item = match item {
@@ -706,10 +723,11 @@ pub async fn get_setback_situation(
     // 2. 进度滞后检测
     // ============================================================
 
-    // 查询所有活跃根目标（进度滞后检测仅关注活跃目标）
+    // 查询所有根目标（进度滞后检测关注根目标；goals 表无 status 列，
+    // 活跃即根目标 parent_id IS NULL，与 stats 口径保持一致）
     use std::collections::HashSet;
     let active_roots: HashSet<String> = sqlx::query_scalar(
-        "SELECT id FROM goals WHERE status = 'active' AND parent_id IS NULL",
+        "SELECT id FROM goals WHERE parent_id IS NULL",
     )
     .fetch_all(&state.0)
     .await?
@@ -1125,8 +1143,11 @@ pub async fn random_longest_streak_encouragement(
     .fetch_all(&mut *tx)
     .await?;
 
+    // F4：读取当前文案风格，用于按风格过滤
+    let style = current_style(&state.0).await?;
+
     // 从 longest_streak 等级抽取（新增的标签）
-    let enc = pick_by_level(&mut tx, "longest_streak", &recent_shown).await?;
+    let enc = pick_by_level(&mut tx, "longest_streak", &recent_shown, Some(&style)).await?;
 
     // 记录展示日志
     if let Some(ref e) = enc {
@@ -1187,4 +1208,84 @@ pub async fn update_encouragement_order(
 pub struct EncouragementOrderItem {
     pub id: String,
     pub sort_order: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    /// 回归测试：四个 mock 库上验证 fetch_candidates 生成的 SQL 有效且能取到文案。
+    ///
+    /// 背景：此前 QueryBuilder 初始 SQL 中混有字面 `?`，生成 `level = ??`、`LIKE ??`
+    /// 导致 "near \"?\": syntax error"，首任务/里程碑/庆祝分支全部取不到文案。
+    const MOCK_DBS: &[&str] = &[
+        "mock_selfpilot.db",
+        "mock_selfpilot_approaching.db",
+        "mock_selfpilot_milestone.db",
+        "mock_selfpilot_celebration.db",
+    ];
+
+    async fn open_mock(name: &str) -> sqlx::SqlitePool {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("testdata")
+            .join(name);
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(5));
+        SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .expect("mock 库打开失败")
+    }
+
+    /// 在独立事务中执行 pick_by_level，结束后回滚释放连接。
+    async fn pick_in_tx(
+        pool: &sqlx::SqlitePool,
+        level: &str,
+        exclude_ids: &[String],
+        style: Option<&str>,
+    ) -> Result<Option<Encouragement>, AppError> {
+        let mut tx = pool.begin().await?;
+        let r = pick_by_level(&mut tx, level, exclude_ids, style).await;
+        tx.rollback().await.ok();
+        r
+    }
+
+    #[tokio::test]
+    async fn pick_by_level_retrieves_on_all_mock_dbs() {
+        for name in MOCK_DBS {
+            let pool = open_mock(name).await;
+
+            // 里程碑分支：longest_streak 等级
+            let enc = pick_in_tx(&pool, "longest_streak", &[], Some("warm"))
+                .await
+                .unwrap_or_else(|e| panic!("{} longest_streak 查询失败: {e}", name));
+            assert!(enc.is_some(), "{} 未取到 longest_streak 文案", name);
+
+            // 首任务分支：normal 等级
+            let enc = pick_in_tx(&pool, "normal", &[], Some("warm"))
+                .await
+                .unwrap_or_else(|e| panic!("{} normal 查询失败: {e}", name));
+            assert!(enc.is_some(), "{} 未取到 normal 文案", name);
+
+            // 庆祝分支：celebration 等级（含降级链入口）
+            let enc = pick_in_tx(&pool, "celebration", &[], Some("warm"))
+                .await
+                .unwrap_or_else(|e| panic!("{} celebration 查询失败: {e}", name));
+            assert!(enc.is_some(), "{} 未取到 celebration 文案", name);
+
+            // 模拟 exclude_ids 非空（走 NOT IN 分支）
+            let ids = vec!["nonexistent-id".to_string()];
+            let enc = pick_in_tx(&pool, "normal", &ids, Some("warm"))
+                .await
+                .unwrap_or_else(|e| panic!("{} normal(NOT IN) 查询失败: {e}", name));
+            assert!(enc.is_some(), "{} 未取到 normal(NOT IN) 文案", name);
+        }
+    }
 }

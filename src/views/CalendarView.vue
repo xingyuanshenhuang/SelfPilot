@@ -40,6 +40,7 @@ import { useAsyncAction } from "@/composables/useAsyncAction";
 // API & Store
 import * as taskApi from "@/api/task";
 import { useGoalStore } from "@/stores/goalStore";
+import { useTaskStore } from "@/stores/taskStore";
 
 // ===== 使用 Composables =====
 
@@ -65,6 +66,7 @@ const { selectedTaskIds, toggleSelect, selectAllVisible, clearSelection } =
   useTaskBatch();
 
 const goalStore = useGoalStore();
+const taskStore = useTaskStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -131,7 +133,7 @@ const periodStats = computed(() => {
 
 async function quickComplete(task: CalendarTask) {
   const updated = await runAction(() =>
-    taskApi.completeTask({
+    taskStore.completeTask({
       task_id: task.id,
       actual_qty: task.plan_qty,
     }),
@@ -361,7 +363,7 @@ async function handleBatchComplete() {
   let ok = 0;
   for (const t of tasksToComplete) {
     try {
-      const updated = await taskApi.completeTask({
+      const updated = await taskStore.completeTask({
         task_id: t.id,
         actual_qty: t.plan_qty,
       });
@@ -492,6 +494,7 @@ async function handleMoveTask(
       @batch-complete="handleBatchComplete"
       @batch-skip="handleBatchSkip"
       @change-week="handleChangeWeek"
+      @change-date="handleChangeDate"
     />
 
     <!-- 日视图 -->

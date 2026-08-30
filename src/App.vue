@@ -23,7 +23,7 @@ import { useEncouragementStore } from "@/stores/encouragementStore";
 import CelebrationModal from "@/components/CelebrationModal.vue";
 import { getCelebrationAchievement } from "@/api/stats";
 import { logEncouragementClose } from "@/api/encouragement";
-import type { CelebrationAchievement } from "@/types";
+import type { CelebrationAchievement, Encouragement } from "@/types";
 
 const activeView = ref<string>("dashboard");
 
@@ -179,22 +179,40 @@ async function closeCelebrationModal() {
 
 const themeProvider = computed(() => (settingStore.isDark ? darkTheme : null));
 
-/** 鼓励语弹窗标题（庆祝 vs 普通） */
-const encouragementTitle = computed(() =>
-  taskStore.isCelebration ? "全部目标完成！" : "今日首完成！",
-);
-const encouragementIcon = computed(() =>
-  taskStore.isCelebration ? "mdi:trophy-award" : "mdi:star-four-points",
-);
-const encouragementHeaderColor = computed(() =>
-  taskStore.isCelebration ? "text-orange-500" : "text-brand-600",
-);
-const encouragementBodyIcon = computed(() =>
-  taskStore.isCelebration ? "mdi:trophy" : "mdi:emoticon-excited-outline",
-);
-const encouragementBodyColor = computed(() =>
-  taskStore.isCelebration ? "text-yellow-500" : "text-orange-400",
-);
+/** 鼓励语弹窗标题（庆祝/里程碑/首任务/遇里程碑石） */
+const encouragementTitle = computed(() => {
+  if (taskStore.isCelebration) return "全部目标完成！";
+  if (taskStore.isMilestone) return "里程碑达成！";
+  return "今日首完成！";
+});
+const encouragementIcon = computed(() => {
+  if (taskStore.isCelebration) return "mdi:trophy-award";
+  if (taskStore.isMilestone) return "mdi:flag-checkered";
+  return "mdi:star-four-points";
+});
+const encouragementHeaderColor = computed(() => {
+  if (taskStore.isCelebration) return "text-orange-500";
+  if (taskStore.isMilestone) return "text-purple-600";
+  return "text-brand-600";
+});
+const encouragementBodyIcon = computed(() => {
+  if (taskStore.isCelebration) return "mdi:trophy";
+  if (taskStore.isMilestone) return "mdi:flag-variant";
+  return "mdi:emoticon-excited-outline";
+});
+const encouragementBodyColor = computed(() => {
+  if (taskStore.isCelebration) return "text-yellow-500";
+  if (taskStore.isMilestone) return "text-purple-400";
+  return "text-orange-400";
+});
+
+/** F8：展示前套用 emoji 装饰（decorate 按 emoji_enabled 决定是否前置 emoji） */
+const decoratedEncouragement = computed<Encouragement | null>(() => {
+  const enc = taskStore.pendingEncouragement;
+  if (!enc) return null;
+  return { ...enc, text: encStore.decorate(enc) };
+});
+
 </script>
 
 <template>
@@ -268,7 +286,7 @@ const encouragementBodyColor = computed(() =>
               :class="[encouragementBodyColor, 'mx-auto mb-3']"
             />
             <div class="text-base text-gray-700 px-4 leading-relaxed">
-              {{ taskStore.pendingEncouragement?.text }}
+              {{ decoratedEncouragement?.text }}
             </div>
           </div>
           <template #footer>
@@ -284,7 +302,7 @@ const encouragementBodyColor = computed(() =>
         <CelebrationModal
           v-model:show="showCelebrationModal"
           :achievement="celebrationAchievement"
-          :encouragement="taskStore.pendingEncouragement"
+          :encouragement="decoratedEncouragement"
           :animation-enabled="encStore.settings.celebration_animation"
           @close="closeCelebrationModal"
         />

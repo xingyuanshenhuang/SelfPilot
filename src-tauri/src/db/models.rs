@@ -504,6 +504,8 @@ pub struct Encouragement {
     pub hidden: Option<i32>,
     /// P3-5：自定义排序顺序
     pub sort_order: Option<i64>,
+    /// 文案风格：warm | professional | minimal（迁移 016 新增）
+    pub style: String,
 }
 
 /// 添加鼓励语输入

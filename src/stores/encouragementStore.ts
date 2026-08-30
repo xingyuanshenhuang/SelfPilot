@@ -101,6 +101,22 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     Object.assign(settings.value, input);
   }
 
+  /** F8：按 emoji_enabled 是否为文案前置 emoji；关闭时原样返回 */
+  function decorate(enc: Encouragement | null): string {
+    if (!enc) return "";
+    if (!settings.value.emoji_enabled) return enc.text;
+    const emojiMap: Record<string, string> = {
+      normal: "🎉",
+      advanced: "🌟",
+      highlight: "🔥",
+      celebration: "🏆",
+      setback: "💪",
+      longest_streak: "🚀",
+    };
+    const emoji = emojiMap[enc.level] ?? "🎈";
+    return `${emoji} ${enc.text}`;
+  }
+
   /** 添加自定义鼓励语 */
   async function add(text: string, level: EncouragementLevel = "normal") {
     const item = await encApi.addEncouragement({ text, level });
@@ -236,6 +252,7 @@ export const useEncouragementStore = defineStore("encouragement", () => {
     add,
     update,
     updateSettings,
+    decorate,
     remove,
     random,
     randomByStreak,

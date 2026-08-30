@@ -2,10 +2,13 @@
 import { computed, watch } from "vue";
 import { NModal, NCard, NButton, NProgress } from "naive-ui";
 import { Icon } from "@iconify/vue";
+import confetti from "canvas-confetti";
 import type { CelebrationAchievement, Encouragement } from "@/types";
 
-// canvas-confetti 类型定义（需要安装：npm install canvas-confetti @types/canvas-confetti）
-// import confetti from "canvas-confetti";
+// useWorker: false —— 禁用 canvas-confetti 的 blob Worker，
+// 避免被严格 CSP（script-src 'self'，worker 回退到 script-src）拦截导致动画失效，
+// 改为主线程 Canvas 渲染，同样流畅且无需放宽 CSP。
+const confettiCannon = confetti.create(undefined, { useWorker: false });
 
 const props = defineProps<{
   show: boolean;
@@ -28,27 +31,28 @@ const progressPercent = computed(() => {
   );
 });
 
-// 播放彩带动画（暂不启用，需安装 canvas-confetti）
-// function playConfetti() {
-//   if (!props.animationEnabled) return;
-//   confetti({ particleCount: 100, spread: 70, origin: { x: 0.1, y: 0.9 } });
-//   setTimeout(() => {
-//     confetti({ particleCount: 100, spread: 70, origin: { x: 0.9, y: 0.9 } });
-//   }, 200);
-//   setTimeout(() => {
-//     confetti({ particleCount: 150, spread: 100, origin: { x: 0.5, y: 0.6 } });
-//   }, 400);
-// }
+// 播放彩带动画（F6：开启庆祝动画时触发，关闭则仅显示弹框）
+function playConfetti() {
+  if (!props.animationEnabled) return;
+  // 五彩纸屑雨（从两侧底部喷出，再中央绽放）
+  confettiCannon({ particleCount: 120, spread: 70, origin: { x: 0.1, y: 0.9 } });
+  setTimeout(() => {
+    confettiCannon({ particleCount: 120, spread: 70, origin: { x: 0.9, y: 0.9 } });
+  }, 150);
+  setTimeout(() => {
+    confettiCannon({ particleCount: 180, spread: 100, scalar: 1.1, origin: { x: 0.5, y: 0.5 } });
+  }, 300);
+}
 
-// 弹窗显示时触发动画（暂不启用）
-// watch(
-//   () => props.show,
-//   (newVal) => {
-//     if (newVal) {
-//       setTimeout(playConfetti, 300);
-//     }
-//   }
-// );
+// 弹窗显示时触发动画
+watch(
+  () => props.show,
+  (newVal) => {
+    if (newVal) {
+      setTimeout(playConfetti, 300);
+    }
+  },
+);
 
 function handleClose() {
   emit("update:show", false);

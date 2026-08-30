@@ -49,6 +49,8 @@ interface WeekViewEmits {
   (e: "batch-skip"): void;
   /** 切换周 */
   (e: "change-week", newStartDate: Date): void;
+  /** 切换日期 */
+  (e: "change-date", newDate: Date): void;
 }
 
 const emit = defineEmits<WeekViewEmits>();
@@ -171,6 +173,12 @@ function handleBatchSkip() {
   emit("batch-skip");
 }
 
+// ===== 日期点击跳转 =====
+function handleDayClick(day: Date) {
+  // 发送日期变更事件，通知父组件切换到日视图
+  emit("change-date", day);
+}
+
 // ===== 生命周期 =====
 
 onMounted(() => {
@@ -210,18 +218,24 @@ onUnmounted(() => {
           <div
             v-for="day in weekGrid"
             :key="day.toISOString()"
-            class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200"
+            class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200 cursor-pointer hover:bg-gray-50 hover:shadow-md"
             role="gridcell"
             :aria-label="getDayAriaLabel(day, getDayStats(day))"
             :class="{
               'border-brand-500 border-2 bg-brand-100/70 shadow-md ring-1 ring-brand-300':
                 isToday(day),
+              'hover:bg-gray-50 hover:shadow-md': true,
             }"
+            @click="handleDayClick(day)"
           >
           <!-- 列头：日期 + 逾期标记 -->
           <div
-            class="flex items-center justify-center gap-1.5 text-center text-sm font-medium pb-1.5 border-b"
-            :class="{ 'text-brand-600 font-bold': isToday(day) }"
+            class="flex items-center justify-center gap-1.5 text-center text-sm font-medium pb-1.5 border-b cursor-pointer hover:bg-gray-100 rounded-t"
+            :class="{
+              'text-brand-600 font-bold': isToday(day),
+              'hover:bg-gray-100': true
+            }"
+            @click="handleDayClick(day)"
           >
             <span>{{ format(day, "E d", { locale: zhCN }) }}</span>
             <NTag
@@ -355,3 +369,16 @@ onUnmounted(() => {
     </NSpin>
   </NCard>
 </template>
+
+<style scoped>
+/* 日期单元格悬停效果 */
+.grid-cols-7 :deep(.min-h-\[280px\]) {
+  transition: all 0.2s ease;
+}
+
+.grid-cols-7 :deep(.min-h-\[280px\]):hover {
+  background-color: #f9fafb;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+</style>

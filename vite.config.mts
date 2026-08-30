@@ -48,5 +48,14 @@ export default defineConfig(async () => ({
     target: ["es2021", "chrome100", "safari13"],
     minify: !process.env.TAURI_DEBUG ? "oxc" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    // StatsView 内联了 echarts（树摇后约 600KB），该页面按需懒加载且桌面端从本地磁盘加载，
+    // 属预期体积，提高 Vite 的警告阈值以消除误报
+    chunkSizeWarningLimit: 700,
+    // 关闭 Rolldown 的 pluginTimings 性能诊断（仅调试性能时需要；避免 PowerShell 把 stderr 当错误染成红色）
+    rolldownOptions: {
+      checks: {
+        pluginTimings: false,
+      },
+    },
   },
 }));

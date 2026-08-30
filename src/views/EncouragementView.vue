@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed, onErrorCaptured, nextTick } from "vue";
 import {
   NCard,
   NButton,
@@ -20,6 +20,13 @@ import { Icon } from "@iconify/vue";
 import { useEncouragementStore } from "@/stores/encouragementStore";
 import type { Encouragement, EncouragementLevel, TagType } from "@/types";
 import * as encApi from "@/api/encouragement";
+
+// 全局错误处理
+onErrorCaptured((err, instance, info) => {
+  console.error("EncouragementView 组件错误:", err, info);
+  // 防止错误传播导致应用卡死
+  return false;
+});
 
 const store = useEncouragementStore();
 const message = useMessage();
@@ -63,6 +70,20 @@ const levelOptions = [
   { label: "庆祝（全部完成）", value: "celebration" },
   { label: "挫折安抚", value: "setback" },
 ];
+
+/** 安全获取等级信息 */
+function getLevelMeta(level: EncouragementLevel) {
+  if (!level || !(level in LEVEL_META)) {
+    return {
+      label: "未知等级",
+      color: "default" as TagType,
+      icon: "mdi:help-circle-outline",
+      desc: "等级信息缺失",
+      iconColor: "text-gray-500",
+    };
+  }
+  return LEVEL_META[level];
+}
 
 /** 等级元信息 */
 const LEVEL_META: Record<
@@ -113,11 +134,17 @@ const LEVEL_META: Record<
 };
 
 onMounted(async () => {
-  await Promise.all([
-    store.fetchAll(),
-    store.fetchStreak(),
-    store.fetchFavorites(),
-  ]);
+  try {
+    await Promise.all([
+      store.fetchAll(),
+      store.fetchStreak(),
+      store.fetchFavorites(),
+    ]);
+  } catch (error) {
+    console.error("初始化鼓励语库失败:", error);
+    // 提供友好的错误提示
+    message.error("鼓励语库加载失败，请稍后重试");
+  }
 });
 
 async function handleAdd() {
@@ -372,13 +399,19 @@ const presetByLevel = computed(() => {
 function filterByText(list: Encouragement[]): Encouragement[] {
   const keyword = searchKeyword.value.trim().toLowerCase();
   if (!keyword) return list;
-  return list.filter((e) => e.text.toLowerCase().includes(keyword));
+  return list.filter((e) => {
+    // 安全检查：确保对象和属性存在
+    return e && e.text && typeof e.text === 'string' && e.text.toLowerCase().includes(keyword);
+  });
 }
 
 /** 根据等级筛选 */
 function filterByLevel(list: Encouragement[]): Encouragement[] {
   if (!filterLevel.value) return list;
-  return list.filter((e) => e.level === filterLevel.value);
+  return list.filter((e) => {
+    // 安全检查：确保对象和level属性存在
+    return e && e.level && typeof e.level === 'string' && e.level === filterLevel.value;
+  });
 }
 
 /** 根据来源筛选 */
@@ -386,9 +419,15 @@ function filterBySource(list: Encouragement[]): Encouragement[] {
   if (!filterSource.value) return list;
   if (filterSource.value === "favorite") {
     // P3-2：筛选收藏的文案
-    return list.filter((e) => store.isFavorited(e.id));
+    return list.filter((e) => {
+      // 安全检查：确保对象和id属性存在
+      return e && e.id && store.isFavorited(e.id);
+    });
   }
-  return list.filter((e) => e.category === filterSource.value);
+  return list.filter((e) => {
+    // 安全检查：确保对象和category属性存在
+    return e && e.category && typeof e.category === 'string' && e.category === filterSource.value;
+  });
 }
 
 /** 综合筛选 */
@@ -415,6 +454,11 @@ function resetFilters() {
   searchKeyword.value = "";
   filterLevel.value = "";
   filterSource.value = "";
+  // 确保强制刷新视图
+  nextTick(() => {
+    // 强制重新计算筛选结果
+    // 不需要重新fetchAll，因为数据已经在store中
+  });
 }
 
 // ============================================================
@@ -696,13 +740,13 @@ async function handleBatchUpdateLevel() {
         <template #header>
           <div class="flex items-center gap-2">
             <Icon
-              :icon="LEVEL_META[level].icon"
+              :icon="getLevelMeta(level).icon"
               width="20"
-              :class="LEVEL_META[level].iconColor"
+              :class="getLevelMeta(level).iconColor"
             />
-            <span>{{ LEVEL_META[level].label }}鼓励语</span>
-            <NTag size="tiny" :type="LEVEL_META[level].color" round>
-              {{ LEVEL_META[level].desc }}
+            <span>{{ getLevelMeta(level).label }}鼓励语</span>
+            <NTag size="tiny" :type="getLevelMeta(level).color" round>
+              {{ getLevelMeta(level).desc }}
             </NTag>
           </div>
         </template>
@@ -814,7 +858,7 @@ async function handleBatchUpdateLevel() {
             </NPopconfirm>
           </div>
         </div>
-        <NEmpty v-else :description="`暂无${LEVEL_META[level].label}鼓励语`" />
+        <NEmpty v-else :description="`暂无${getLevelMeta(level).label}鼓励语`" />
       </NCard>
     </template>
 
@@ -866,9 +910,9 @@ async function handleBatchUpdateLevel() {
           <NTag
             size="tiny"
             :bordered="false"
-            :type="LEVEL_META[item.level].color"
+            :type="LEVEL_META[item.level]?.color || 'default'"
           >
-            {{ LEVEL_META[item.level].label }}
+            {{ LEVEL_META[item.level]?.label || '未知等级' }}
           </NTag>
           <!-- P0-5：编辑按钮 -->
           <NButton
