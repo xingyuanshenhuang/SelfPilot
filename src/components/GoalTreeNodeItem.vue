@@ -319,7 +319,9 @@ const isDraggingThisGoal = computed(
 <template>
   <div
     :class="[
-      level > 0 ? 'ml-3 pl-3 border-l border-gray-200' : '',
+      level > 0
+        ? 'ml-3 pl-3 border-l border-gray-200 dark:border-surface-borderMuted'
+        : '',
       isDraggingThisGoal ? 'dragging-opacity' : '',
       isTaskDragOverInside ? 'drop-inside-task' : '',
       isGoalDragOverBefore ? 'drop-before-goal' : '',
@@ -369,7 +371,7 @@ const isDraggingThisGoal = computed(
             {{ node.goal.name }}
           </div>
           <div
-            class="text-xs text-gray-500 flex items-center gap-3 mt-0.5 flex-wrap"
+            class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-3 mt-0.5 flex-wrap"
           >
             <NTag
               v-if="!node.goal.deadline"
@@ -378,7 +380,11 @@ const isDraggingThisGoal = computed(
             >
               无限期
             </NTag>
-            <span v-else :class="{ 'text-red-500': isOverdue }">
+            <!-- 已完成目标不再展示剩余/逾期天数，避免出现"已逾期"状态提示 -->
+            <span
+              v-else-if="!node.is_completed"
+              :class="{ 'text-red-500': isOverdue }"
+            >
               {{ getDaysLeft(node.goal.deadline) }}
             </span>
             <span v-if="node.goal.total_qty > 0">
@@ -496,7 +502,7 @@ const isDraggingThisGoal = computed(
           :goal-name="node.goal.name"
         >
           <template #label>
-            <div v-if="hasChildren" class="text-xs text-gray-400 px-3 py-1">
+            <div v-if="hasChildren" class="text-xs text-gray-400 dark:text-gray-500 px-3 py-1">
               直属任务
             </div>
           </template>
@@ -505,7 +511,7 @@ const isDraggingThisGoal = computed(
         <!-- 空状态 -->
         <div
           v-if="node.sub_goals.length === 0 && node.tasks.length === 0"
-          class="text-sm text-gray-400 py-2"
+          class="text-sm text-gray-400 dark:text-gray-500 py-2"
         >
           暂无子目标和任务，点击上方按钮开始添加
         </div>

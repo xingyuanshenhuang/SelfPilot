@@ -177,23 +177,23 @@ defineExpose({
       :aria-label="`${periodLabel}统计：完成率 ${periodStats.completionRate}%，已完成 ${periodStats.done}，待完成 ${periodStats.pending}，逾期 ${periodStats.overdue}`"
     >
       <div class="flex items-baseline gap-2">
-        <span class="text-xs text-gray-500">{{ periodLabel }}</span>
-        <span class="text-xl font-bold text-brand-600">
+        <span class="text-xs text-gray-500 dark:text-gray-400">{{ periodLabel }}</span>
+        <span class="text-xl font-bold text-brand-600 dark:text-brand-400">
           {{ periodStats.completionRate }}%
         </span>
-        <span class="text-xs text-gray-400">完成率</span>
+        <span class="text-xs text-gray-400 dark:text-gray-500">完成率</span>
       </div>
 
       <div class="flex items-center gap-1.5">
         <Icon icon="mdi:check-circle" class="text-green-500" width="16" />
         <span class="text-sm font-semibold">{{ periodStats.done }}</span>
-        <span class="text-xs text-gray-500">已完成</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">已完成</span>
       </div>
 
       <div class="flex items-center gap-1.5">
-        <Icon icon="mdi:clock-outline" class="text-gray-400" width="16" />
+        <Icon icon="mdi:clock-outline" class="text-gray-400 dark:text-gray-500" width="16" />
         <span class="text-sm font-semibold">{{ periodStats.pending }}</span>
-        <span class="text-xs text-gray-500">待完成</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">待完成</span>
       </div>
 
       <div v-if="periodStats.overdue > 0" class="flex items-center gap-1.5">
@@ -201,19 +201,19 @@ defineExpose({
         <span class="text-sm font-semibold text-red-500">
           {{ periodStats.overdue }}
         </span>
-        <span class="text-xs text-gray-500">逾期</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">逾期</span>
       </div>
 
       <div v-if="periodStats.skipped > 0" class="flex items-center gap-1.5">
         <Icon
           icon="mdi:skip-next-circle-outline"
-          class="text-gray-400"
+          class="text-gray-400 dark:text-gray-500"
           width="16"
         />
-        <span class="text-sm font-semibold text-gray-400">
+        <span class="text-sm font-semibold text-gray-400 dark:text-gray-500">
           {{ periodStats.skipped }}
         </span>
-        <span class="text-xs text-gray-500">已跳过</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">已跳过</span>
       </div>
     </div>
   </NCard>
@@ -238,11 +238,11 @@ defineExpose({
         />
         <Icon
           icon="mdi:filter-variant"
-          class="text-gray-400"
+          class="text-gray-400 dark:text-gray-500"
           width="16"
           aria-hidden="true"
         />
-        <span class="text-sm font-medium text-gray-700">筛选</span>
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">筛选</span>
 
         <!-- 激活条件数徽标 -->
         <span
@@ -257,7 +257,7 @@ defineExpose({
         <!-- 折叠态提示 -->
         <span
           v-if="filterCollapsed"
-          class="text-xs text-gray-400 ml-auto"
+          class="text-xs text-gray-400 dark:text-gray-500 ml-auto"
           aria-hidden="true"
         >
           点击展开
@@ -276,7 +276,7 @@ defineExpose({
         aria-label="筛选选项"
       >
         <div
-          class="flex items-center gap-3 flex-wrap pt-3 mt-1 border-t border-gray-100"
+          class="flex items-center gap-3 flex-wrap pt-3 mt-1 border-t border-gray-100 dark:border-surface-borderMuted"
         >
           <div class="filter-field">
             <label class="filter-label" for="filter-goal-select">目标</label>
@@ -369,6 +369,10 @@ defineExpose({
   flex-shrink: 0;
 }
 
+:global(.dark) .filter-toggle-icon {
+  color: #9ca3af;
+}
+
 .filter-toggle-icon.rotate-90 {
   transform: rotate(90deg);
 }
@@ -406,6 +410,10 @@ defineExpose({
   font-size: 12px;
   color: #6b7280;
   white-space: nowrap;
+}
+
+:global(.dark) .filter-label {
+  color: #9ca3af;
 }
 
 /* 过渡动画 */

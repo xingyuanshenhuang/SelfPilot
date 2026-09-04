@@ -83,36 +83,36 @@ function handleClose() {
         <div class="text-center mb-6">
           <div class="flex justify-center mb-3">
             <div
-              class="w-16 h-16 rounded-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center"
+              class="w-16 h-16 rounded-full bg-gradient-to-br from-amber-100 to-amber-200 dark:from-amber-500/25 dark:to-amber-500/10 flex items-center justify-center"
             >
               <Icon icon="mdi:trophy" width="36" class="text-amber-500" />
             </div>
           </div>
-          <h2 class="text-2xl font-bold text-gray-800 mb-2">全部目标完成！</h2>
-          <p class="text-gray-500">
+          <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">全部目标完成！</h2>
+          <p class="text-gray-500 dark:text-gray-400">
             {{ encouragement?.text ?? "这一刻属于坚持的你。" }}
           </p>
         </div>
 
         <!-- 成就回顾 -->
         <div v-if="achievement" class="grid grid-cols-3 gap-4 mb-6">
-          <div class="text-center p-3 rounded-lg bg-gray-50">
+          <div class="text-center p-3 rounded-lg bg-gray-50 dark:bg-surface-muted">
             <div class="text-2xl font-bold text-brand-500">
               {{ achievement.days_elapsed }}
             </div>
-            <div class="text-xs text-gray-500 mt-1">天耗时</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">天耗时</div>
           </div>
-          <div class="text-center p-3 rounded-lg bg-gray-50">
+          <div class="text-center p-3 rounded-lg bg-gray-50 dark:bg-surface-muted">
             <div class="text-2xl font-bold text-emerald-500">
               {{ achievement.completed_tasks }}
             </div>
-            <div class="text-xs text-gray-500 mt-1">任务完成</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">任务完成</div>
           </div>
-          <div class="text-center p-3 rounded-lg bg-gray-50">
+          <div class="text-center p-3 rounded-lg bg-gray-50 dark:bg-surface-muted">
             <div class="text-2xl font-bold text-amber-500">
               {{ achievement.final_longest_streak }}
             </div>
-            <div class="text-xs text-gray-500 mt-1">最长连续</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">最长连续</div>
           </div>
         </div>
 
@@ -128,7 +128,7 @@ function handleClose() {
 
         <!-- 庆祝文案 -->
         <div class="text-center mb-4">
-          <p class="text-sm text-gray-500">你用行动证明了：能坚持。</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">你用行动证明了：能坚持。</p>
         </div>
 
         <!-- 操作按钮 -->

@@ -48,7 +48,7 @@ function handleClose() {
         <!-- 连续中断提示 -->
         <div
           v-if="hasStreakBreak"
-          class="p-3 rounded-lg bg-amber-50 border border-amber-100"
+          class="p-3 rounded-lg bg-amber-50 border border-amber-100 dark:bg-amber-500/15 dark:border-amber-500/40"
         >
           <div class="flex items-center gap-2 mb-2">
             <Icon
@@ -56,9 +56,9 @@ function handleClose() {
               class="text-amber-500"
               width="18"
             />
-            <span class="font-medium text-amber-700">连续记录中断了</span>
+            <span class="font-medium text-amber-700 dark:text-amber-400">连续记录中断了</span>
           </div>
-          <p class="text-sm text-amber-600">
+          <p class="text-sm text-amber-600 dark:text-amber-300">
             之前保持了
             <strong>{{ streakPrev }}</strong> 天连续，今天没有完成任务。
             没关系，中断只是暂停，不是放弃。
@@ -68,7 +68,7 @@ function handleClose() {
         <!-- 进度滞后提示 -->
         <div
           v-if="hasProgressLag"
-          class="p-3 rounded-lg bg-orange-50 border border-orange-100"
+          class="p-3 rounded-lg bg-orange-50 border border-orange-100 dark:bg-orange-500/15 dark:border-orange-500/40"
         >
           <div class="flex items-center gap-2 mb-2">
             <Icon
@@ -76,7 +76,7 @@ function handleClose() {
               class="text-orange-500"
               width="18"
             />
-            <span class="font-medium text-orange-700"
+            <span class="font-medium text-orange-700 dark:text-orange-400"
               >部分目标进度需要关注</span
             >
           </div>
@@ -86,7 +86,7 @@ function handleClose() {
               :key="goal.id"
               class="flex items-center justify-between text-sm"
             >
-              <span class="text-orange-600">{{ goal.name }}</span>
+              <span class="text-orange-600 dark:text-orange-400">{{ goal.name }}</span>
               <NTag
                 size="small"
                 :type="goal.days_remaining < 0 ? 'error' : 'warning'"
@@ -99,13 +99,13 @@ function handleClose() {
               </NTag>
             </div>
           </div>
-          <p class="text-sm text-orange-600 mt-2">
+          <p class="text-sm text-orange-600 dark:text-orange-400 mt-2">
             可以尝试重新规划，或者调整目标节奏。
           </p>
         </div>
 
         <!-- 安抚文案 -->
-        <p class="text-gray-600 text-sm">
+        <p class="text-gray-600 dark:text-gray-300 text-sm">
           遇到波折很正常，关键是能不能重启。明天又是新的一天。
         </p>
       </div>

@@ -34,7 +34,7 @@ const color = computed(() => {
         :cy="size / 2"
         :r="radius"
         fill="none"
-        stroke="#e4e7ed"
+        class="progress-ring-track"
         :stroke-width="stroke"
       />
       <circle
@@ -51,8 +51,19 @@ const color = computed(() => {
         style="transition: stroke-dashoffset 0.3s ease"
       />
     </svg>
-    <span class="absolute text-xs font-semibold text-gray-700">
+    <span class="absolute text-xs font-semibold text-gray-700 dark:text-gray-300">
       {{ displayPercent }}%
     </span>
   </div>
 </template>
+
+<style scoped>
+/* 进度环底色轨，默认浅色，深色模式下使用半透明白以贴合暗色表面 */
+.progress-ring-track {
+  stroke: #e4e7ed;
+}
+
+:global(.dark) .progress-ring-track {
+  stroke: rgba(255, 255, 255, 0.16);
+}
+</style>

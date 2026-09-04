@@ -139,9 +139,9 @@ function handleSkip() {
 
 <template>
   <div
-    class="task-item flex items-center gap-3 px-3 py-2 rounded transition-colors hover:bg-gray-50"
+    class="task-item flex items-center gap-3 px-3 py-2 rounded transition-colors hover:bg-gray-50 dark:hover:bg-surface-hover"
     :class="{
-      'bg-red-50': overdue,
+      'bg-red-50 dark:bg-red-500/15': overdue,
     }"
   >
     <div
@@ -171,7 +171,7 @@ function handleSkip() {
             task.goal_name
           }}</NTag>
         </div>
-        <div class="text-xs text-gray-500 mt-0.5">{{ completionText }}</div>
+        <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ completionText }}</div>
       </div>
     </div>
 
@@ -276,7 +276,7 @@ function handleSkip() {
             style="width: 100%"
           />
         </NFormItem>
-        <div class="text-xs text-gray-500">
+        <div class="text-xs text-gray-500 dark:text-gray-400">
           补完成只更新历史完成记录，不会影响未来任务的计划数量
         </div>
       </NForm>

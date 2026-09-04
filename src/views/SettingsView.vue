@@ -284,7 +284,7 @@ async function handleNativeRestore() {
         </div>
       </template>
       <NSpace vertical :size="12">
-        <div class="text-sm text-gray-600">选择应用的主题外观：</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300">选择应用的主题外观：</div>
         <NRadioGroup
           :value="settingStore.theme"
           @update:value="handleThemeChange"
@@ -318,7 +318,7 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">显示鼓励语</div>
-            <div class="text-xs text-gray-500">完成任务时显示鼓励文案</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">完成任务时显示鼓励文案</div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.enabled"
@@ -370,7 +370,7 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">庆祝动画</div>
-            <div class="text-xs text-gray-500">全部目标完成时显示庆祝效果</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">全部目标完成时显示庆祝效果</div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.celebration_animation"
@@ -386,7 +386,7 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">显示 emoji</div>
-            <div class="text-xs text-gray-500">鼓励语文案中显示表情符号</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">鼓励语文案中显示表情符号</div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.emoji_enabled"
@@ -414,7 +414,7 @@ async function handleNativeRestore() {
         </div>
       </template>
       <NSpace vertical :size="12">
-        <div class="text-sm text-gray-600">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
           一键备份所有数据，恢复时完整还原，速度快。适合日常备份使用。
         </div>
         <NSpace>
@@ -441,7 +441,7 @@ async function handleNativeRestore() {
             恢复备份
           </NButton>
         </NSpace>
-        <div class="text-xs text-gray-400 flex items-center gap-1">
+        <div class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
           <Icon icon="mdi:information-outline" width="14" />
           恢复时会自动备份当前数据，不用担心丢失
         </div>
@@ -461,7 +461,7 @@ async function handleNativeRestore() {
         </div>
       </template>
       <NSpace vertical :size="12">
-        <div class="text-sm text-gray-600">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
           以文本格式导出或导入数据。适合跨版本迁移或选择性合并数据。
         </div>
         <NSpace>
@@ -491,8 +491,8 @@ async function handleNativeRestore() {
           style="display: none"
           @change="handleFileChange"
         />
-        <div class="text-xs text-gray-400 space-y-0.5">
-          <div class="flex items-center gap-1 font-medium text-gray-500">
+        <div class="text-xs text-gray-400 dark:text-gray-500 space-y-0.5">
+          <div class="flex items-center gap-1 font-medium text-gray-500 dark:text-gray-400">
             导入时的冲突处理方式：
           </div>
           <div class="flex items-center gap-1">
@@ -525,8 +525,8 @@ async function handleNativeRestore() {
       </template>
       <table class="w-full text-sm border-collapse">
         <thead>
-          <tr class="border-b border-gray-200">
-            <th class="py-2 px-3 text-left text-gray-500 font-medium w-24" />
+          <tr class="border-b border-gray-200 dark:border-surface-border">
+            <th class="py-2 px-3 text-left text-gray-500 dark:text-gray-400 font-medium w-24" />
             <th class="py-2 px-3 text-center font-medium text-purple-600">
               <Icon
                 icon="mdi:database-sync-outline"
@@ -535,7 +535,7 @@ async function handleNativeRestore() {
               />
               一键备份
             </th>
-            <th class="py-2 px-3 text-center font-medium text-brand-600">
+            <th class="py-2 px-3 text-center font-medium text-brand-600 dark:text-brand-400">
               <Icon
                 icon="mdi:file-document-outline"
                 width="16"
@@ -546,23 +546,23 @@ async function handleNativeRestore() {
           </tr>
         </thead>
         <tbody>
-          <tr class="border-b border-gray-100">
-            <td class="py-2 px-3 text-gray-500">备份范围</td>
+          <tr class="border-b border-gray-100 dark:border-surface-borderMuted">
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">备份范围</td>
             <td class="py-2 px-3 text-center">全部数据</td>
             <td class="py-2 px-3 text-center">全部数据</td>
           </tr>
-          <tr class="border-b border-gray-100">
-            <td class="py-2 px-3 text-gray-500">数据格式</td>
+          <tr class="border-b border-gray-100 dark:border-surface-borderMuted">
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">数据格式</td>
             <td class="py-2 px-3 text-center">数据库文件</td>
             <td class="py-2 px-3 text-center">文本文件</td>
           </tr>
-          <tr class="border-b border-gray-100">
-            <td class="py-2 px-3 text-gray-500">恢复方式</td>
+          <tr class="border-b border-gray-100 dark:border-surface-borderMuted">
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">恢复方式</td>
             <td class="py-2 px-3 text-center">替换全部数据</td>
             <td class="py-2 px-3 text-center">可选择合并</td>
           </tr>
-          <tr class="border-b border-gray-100">
-            <td class="py-2 px-3 text-gray-500">恢复速度</td>
+          <tr class="border-b border-gray-100 dark:border-surface-borderMuted">
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">恢复速度</td>
             <td class="py-2 px-3 text-center">
               <NTag size="small" type="success" :bordered="false">快</NTag>
             </td>
@@ -570,15 +570,15 @@ async function handleNativeRestore() {
               <NTag size="small" type="warning" :bordered="false">较慢</NTag>
             </td>
           </tr>
-          <tr class="border-b border-gray-100">
-            <td class="py-2 px-3 text-gray-500">适用场景</td>
+          <tr class="border-b border-gray-100 dark:border-surface-borderMuted">
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">适用场景</td>
             <td class="py-2 px-3 text-center">日常备份恢复</td>
             <td class="py-2 px-3 text-center">跨版本迁移</td>
           </tr>
           <tr>
-            <td class="py-2 px-3 text-gray-500">推荐度</td>
+            <td class="py-2 px-3 text-gray-500 dark:text-gray-400">推荐度</td>
             <td class="py-2 px-3 text-center text-purple-500">⭐⭐⭐</td>
-            <td class="py-2 px-3 text-center text-gray-400">⭐⭐</td>
+            <td class="py-2 px-3 text-center text-gray-400 dark:text-gray-500">⭐⭐</td>
           </tr>
         </tbody>
       </table>
@@ -619,17 +619,17 @@ async function handleNativeRestore() {
     >
       <NSpace vertical :size="12">
         <!-- 数据摘要 -->
-        <div v-if="importSummary" class="bg-gray-50 rounded p-3 space-y-1">
-          <div class="text-sm font-medium text-gray-700 mb-2">备份文件信息</div>
-          <div class="text-xs text-gray-600 flex items-center gap-2">
+        <div v-if="importSummary" class="bg-gray-50 dark:bg-surface-muted rounded p-3 space-y-1">
+          <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">备份文件信息</div>
+          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
             <Icon icon="mdi:tag-outline" width="14" />
             版本：{{ importSummary.version || "未知" }}
           </div>
-          <div class="text-xs text-gray-600 flex items-center gap-2">
+          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
             <Icon icon="mdi:clock-outline" width="14" />
             导出时间：{{ formattedExportTime }}
           </div>
-          <div class="text-xs text-gray-600 flex items-center gap-2">
+          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
             <Icon icon="mdi:bullseye" width="14" />
             {{ importSummary.goals_count ?? 0 }} 个目标，
             {{ importSummary.tasks_count ?? 0 }} 个任务，

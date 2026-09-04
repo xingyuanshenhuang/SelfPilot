@@ -644,7 +644,7 @@ pub async fn get_streak(state: State<'_, DbPool>) -> AppResult<StreakInfo> {
 ///
 /// 检测逻辑：
 /// 1. streak_break：昨日连续天数 ≥3，今日有任务但未完成，导致连续归零
-/// 2. progress_lag：目标预测完成日期 > 截止日期
+/// 2. progress_lag：目标截止日期已过（逾期）或预测完成日期晚于截止日期（已完成目标除外）
 ///
 /// 使用 settings 表存储 last_streak_check_date 和 last_streak_value 实现跨日对比
 #[tauri::command]
@@ -734,6 +734,16 @@ pub async fn get_setback_situation(
     .into_iter()
     .collect();
 
+    // 已完成目标不再纳入滞后/逾期提示（无论其原定截止时间是否已过）。
+    // 使用 progress_service 的递归完成判定，避免预测逻辑对含子目标的根目标漏判。
+    let completed_ids: HashSet<String> =
+        crate::services::progress_service::calc_all_goals_progress(&state.0)
+            .await?
+            .into_iter()
+            .filter(|p| p.is_completed)
+            .map(|p| p.id)
+            .collect();
+
     // 复用运行时完成预测，替代原 JOIN 不存在的 goal_progress 表
     // （goal_progress 表从未被迁移创建，原实现每次调用报 "no such table: goal_progress"
     //   且进度滞后检测静默失效；现基于 stats 完成预测在运行时计算 predicted_date）
@@ -741,23 +751,34 @@ pub async fn get_setback_situation(
 
     let lagging_goals: Vec<LaggingGoal> = predictions
         .iter()
-        .filter(|p| active_roots.contains(&p.goal_id))
+        .filter(|p| {
+            active_roots.contains(&p.goal_id) && !completed_ids.contains(&p.goal_id)
+        })
         .filter_map(|p| {
-            // 必须有截止日期和预测日期
+            // 必须有截止日期
             let deadline = p.deadline.as_ref()?;
-            let predicted = p.predicted_date.as_ref()?;
 
             // 解析日期
             let dl = chrono::NaiveDate::parse_from_str(deadline, "%Y-%m-%d").ok()?;
-            let pred = chrono::NaiveDate::parse_from_str(predicted, "%Y-%m-%d").ok()?;
+            let predicted = p
+                .predicted_date
+                .as_ref()
+                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
-            // 预测日期 > 截止日期 = 滞后
-            if pred > dl {
+            // 滞后 = 截止日期已过（逾期）或预测完成日期晚于截止日期。
+            // 逾期判断直接基于截止日期，避免依赖预测日期（无近期进度数据时
+            // predicted_date 为空，会导致逾期目标被漏报）。
+            let is_overdue = dl < today;
+            let is_late = predicted.map(|pred| pred > dl).unwrap_or(false);
+
+            if is_overdue || is_late {
                 Some(LaggingGoal {
                     id: p.goal_id.clone(),
                     name: p.goal_name.clone(),
                     deadline: deadline.clone(),
-                    predicted_end_date: predicted.clone(),
+                    predicted_end_date: predicted
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| deadline.clone()),
                     days_remaining: p.days_to_deadline.unwrap_or(0) as i32,
                 })
             } else {
@@ -1214,6 +1235,7 @@ pub struct EncouragementOrderItem {
 mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -1287,5 +1309,153 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{} normal(NOT IN) 查询失败: {e}", name));
             assert!(enc.is_some(), "{} 未取到 normal(NOT IN) 文案", name);
         }
+    }
+
+    // ============================================================
+    // 已完成目标不再进入滞后/逾期提示（get_setback_situation 筛选逻辑回归）
+    // ============================================================
+
+    /// 构造临时场景库（应用全部迁移），插入四类场景目标后返回连接池
+    async fn setup_scenario_db() -> sqlx::SqlitePool {
+        let dir = std::env::temp_dir().join("selfpilot_test_setback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("scenario.db");
+        let _ = std::fs::remove_file(&db_path);
+
+        let opts = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_goal(
+        pool: &sqlx::SqlitePool,
+        id: &str,
+        name: &str,
+        deadline: Option<&str>,
+        total_qty: f64,
+    ) {
+        let path = format!("/{}", id);
+        sqlx::query(
+            "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+             VALUES (?, ?, NULL, ?, ?, ?, '', 0, '2026-01-01T00:00:00')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(&path)
+        .bind(deadline)
+        .bind(total_qty)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_task(
+        pool: &sqlx::SqlitePool,
+        id: &str,
+        goal_id: &str,
+        status: &str,
+        plan_qty: f64,
+        actual_qty: f64,
+    ) {
+        let path = format!("/{}/{}", goal_id, id);
+        sqlx::query(
+            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date, plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at)
+             VALUES (?, ?, NULL, NULL, ?, ?, NULL, ?, ?, '', ?, 0, 'manual', 0, '2026-01-01T00:00:00')",
+        )
+        .bind(id)
+        .bind(goal_id)
+        .bind(&path)
+        .bind(id)
+        .bind(plan_qty)
+        .bind(actual_qty)
+        .bind(status)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn completed_goals_excluded_from_overdue_lagging() {
+        let pool = setup_scenario_db().await;
+
+        // A 按时完成：截止在未来，任务全部完成
+        insert_goal(&pool, "g-a", "按时完成", Some("2999-01-01"), 10.0).await;
+        insert_task(&pool, "t-a1", "g-a", "done", 5.0, 5.0).await;
+        insert_task(&pool, "t-a2", "g-a", "done", 5.0, 5.0).await;
+
+        // B 超期后完成：截止已过，任务全部完成（核心修复场景）
+        insert_goal(&pool, "g-b", "超期后完成", Some("2020-01-01"), 10.0).await;
+        insert_task(&pool, "t-b1", "g-b", "done", 10.0, 10.0).await;
+
+        // C 逾期未完成：截止已过，任务未完成（回归：逾期检测不应失效）
+        insert_goal(&pool, "g-c", "逾期未完成", Some("2020-01-01"), 10.0).await;
+        insert_task(&pool, "t-c1", "g-c", "pending", 10.0, 0.0).await;
+
+        // D 完成后再次编辑：原按时完成，之后把截止改到过去，仍应保持已完成且不提示
+        insert_goal(&pool, "g-d", "完成后编辑", Some("2020-01-01"), 10.0).await;
+        insert_task(&pool, "t-d1", "g-d", "done", 10.0, 10.0).await;
+
+        // 已完成集合来源与 get_setback_situation 完全一致
+        let completed_ids: HashSet<String> =
+            crate::services::progress_service::calc_all_goals_progress(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|p| p.is_completed)
+                .map(|p| p.id)
+                .collect();
+
+        assert!(completed_ids.contains("g-a"), "A 按时完成应判为已完成");
+        assert!(completed_ids.contains("g-b"), "B 超期后完成应判为已完成");
+        assert!(!completed_ids.contains("g-c"), "C 逾期未完成不应判为已完成");
+        assert!(completed_ids.contains("g-d"), "D 完成后再次编辑仍应为已完成");
+
+        // 复现 get_setback_situation 的滞后筛选（与真实实现同一段逻辑）
+        let today = chrono::Local::now().date_naive();
+        let predictions =
+            crate::commands::stats::calc_completion_predictions(&pool).await.unwrap();
+        let lagging: Vec<String> = predictions
+            .iter()
+            .filter(|p| !completed_ids.contains(&p.goal_id))
+            .filter_map(|p| {
+                let dl = chrono::NaiveDate::parse_from_str(p.deadline.as_ref()?, "%Y-%m-%d").ok()?;
+                let predicted = p
+                    .predicted_date
+                    .as_ref()
+                    .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+                let is_overdue = dl < today;
+                let is_late = predicted.map(|pred| pred > dl).unwrap_or(false);
+                if is_overdue || is_late {
+                    Some(p.goal_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !lagging.contains(&"g-a".to_string()),
+            "A 按时完成不应进入逾期/滞后提示"
+        );
+        assert!(
+            !lagging.contains(&"g-b".to_string()),
+            "B 超期后完成不应进入逾期/滞后提示（核心修复）"
+        );
+        assert!(
+            lagging.contains(&"g-c".to_string()),
+            "C 逾期未完成仍应进入逾期/滞后提示（回归）"
+        );
+        assert!(
+            !lagging.contains(&"g-d".to_string()),
+            "D 完成后再次编辑不应进入逾期/滞后提示"
+        );
     }
 }

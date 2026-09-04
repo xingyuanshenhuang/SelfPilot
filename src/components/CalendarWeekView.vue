@@ -204,7 +204,7 @@ onUnmounted(() => {
       @batch-skip="handleBatchSkip"
     >
       <template #leading>
-        <span class="text-xs text-gray-500">点击任务前框选以批量操作</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">点击任务前框选以批量操作</span>
       </template>
     </BatchToolbar>
 
@@ -218,22 +218,22 @@ onUnmounted(() => {
           <div
             v-for="day in weekGrid"
             :key="day.toISOString()"
-            class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200 cursor-pointer hover:bg-gray-50 hover:shadow-md"
+            class="min-h-[280px] p-2 rounded border flex flex-col transition-all duration-200 cursor-pointer hover:bg-gray-50 dark:hover:bg-surface-hover hover:shadow-md"
             role="gridcell"
             :aria-label="getDayAriaLabel(day, getDayStats(day))"
             :class="{
-              'border-brand-500 border-2 bg-brand-100/70 shadow-md ring-1 ring-brand-300':
+              'border-brand-500 border-2 bg-brand-100/70 dark:bg-brand-500/25 shadow-md ring-1 ring-brand-300':
                 isToday(day),
-              'hover:bg-gray-50 hover:shadow-md': true,
+              'hover:bg-gray-50 dark:hover:bg-surface-hover hover:shadow-md': true,
             }"
             @click="handleDayClick(day)"
           >
           <!-- 列头：日期 + 逾期标记 -->
           <div
-            class="flex items-center justify-center gap-1.5 text-center text-sm font-medium pb-1.5 border-b cursor-pointer hover:bg-gray-100 rounded-t"
+            class="flex items-center justify-center gap-1.5 text-center text-sm font-medium pb-1.5 border-b cursor-pointer hover:bg-gray-100 dark:hover:bg-surface-hoverStrong rounded-t"
             :class="{
-              'text-brand-600 font-bold': isToday(day),
-              'hover:bg-gray-100': true
+              'text-brand-600 dark:text-brand-400 font-bold': isToday(day),
+              'hover:bg-gray-100 dark:hover:bg-surface-hoverStrong': true
             }"
             @click="handleDayClick(day)"
           >
@@ -269,8 +269,8 @@ onUnmounted(() => {
                   role="listitem"
                   :aria-label="getTaskAriaLabel(t)"
                   :class="{
-                    'bg-red-50': t.is_overdue,
-                    'bg-green-50': t.status === 'done',
+                    'bg-red-50 dark:bg-red-500/20': t.is_overdue,
+                    'bg-green-50 dark:bg-green-500/20': t.status === 'done',
                     'opacity-60': t.status === 'skipped',
                   }"
                 >
@@ -303,7 +303,7 @@ onUnmounted(() => {
               <!-- 任务详情弹层 -->
               <div class="space-y-1 text-xs">
                 <div class="font-medium text-sm">{{ t.name }}</div>
-                <div class="flex items-center gap-2 text-gray-500">
+                <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
                   <Icon
                     :icon="STATUS_META[t.status].icon"
                     :color="STATUS_META[t.status].color"
@@ -314,7 +314,7 @@ onUnmounted(() => {
                     {{ t.goal_name }}
                   </NTag>
                 </div>
-                <div class="text-gray-500">
+                <div class="text-gray-500 dark:text-gray-400">
                   进度：{{ t.actual_qty }}/{{ t.plan_qty }}{{ t.unit }}
                 </div>
                 <div
@@ -325,7 +325,7 @@ onUnmounted(() => {
                 </div>
                 <div
                   v-if="t.is_blocked"
-                  class="text-gray-500 flex items-center gap-1"
+                  class="text-gray-500 dark:text-gray-400 flex items-center gap-1"
                 >
                   <Icon icon="mdi:lock-outline" width="14" />
                   <span>{{ getBlockedTooltip(t) }}</span>
@@ -344,10 +344,10 @@ onUnmounted(() => {
           <!-- 列底部完成率进度条 -->
           <div
             v-if="getDayStats(day).total > 0"
-            class="mt-1 pt-1 border-t border-gray-100"
+            class="mt-1 pt-1 border-t border-gray-100 dark:border-surface-borderMuted"
           >
             <div
-              class="flex items-center justify-between text-[10px] text-gray-500 mb-0.5"
+              class="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400 mb-0.5"
             >
               <span>完成率</span>
               <span>{{ getDayCompletionRate(day) }}%</span>
@@ -380,5 +380,10 @@ onUnmounted(() => {
   background-color: #f9fafb;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
   transform: translateY(-1px);
+}
+
+:global(.dark) .grid-cols-7 :deep(.min-h-\[280px\]):hover {
+  background-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
 }
 </style>

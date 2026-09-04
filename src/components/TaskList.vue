@@ -40,7 +40,7 @@ const useVirtual = computed(() => props.tasks.length > VIRTUAL_THRESHOLD);
 function rowClass(task: Task): string[] {
   return [
     "flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-grab h-9",
-    "hover:bg-gray-50",
+    "hover:bg-gray-50 dark:hover:bg-surface-hover",
     "task-row",
     draggingTaskId.value === task.id ? "dragging-opacity" : "",
     isTaskDropBefore(task) ? "task-drop-before" : "",
@@ -163,7 +163,7 @@ function isTaskDropAfter(task: Task): boolean {
         >
           {{ task.name }}
         </span>
-        <span class="text-xs text-gray-500">{{ task.plan_date }}</span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">{{ task.plan_date }}</span>
         <NTag
           size="tiny"
           :bordered="false"
@@ -171,7 +171,7 @@ function isTaskDropAfter(task: Task): boolean {
         >
           {{ task.source === "auto" ? "自动" : "手动" }}
         </NTag>
-        <span class="text-xs text-gray-500">
+        <span class="text-xs text-gray-500 dark:text-gray-400">
           {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
         </span>
         <NDropdown
@@ -220,7 +220,7 @@ function isTaskDropAfter(task: Task): boolean {
             >
               {{ item.name }}
             </span>
-            <span class="text-xs text-gray-500">{{ item.plan_date }}</span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ item.plan_date }}</span>
             <NTag
               size="tiny"
               :bordered="false"
@@ -228,7 +228,7 @@ function isTaskDropAfter(task: Task): boolean {
             >
               {{ item.source === "auto" ? "自动" : "手动" }}
             </NTag>
-            <span class="text-xs text-gray-500">
+            <span class="text-xs text-gray-500 dark:text-gray-400">
               {{ item.actual_qty }}/{{ item.plan_qty }}{{ item.unit }}
             </span>
             <NDropdown

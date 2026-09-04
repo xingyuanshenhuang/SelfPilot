@@ -99,7 +99,7 @@ function handleSubmit() {
   <!-- 无可用目标空态（仅内联模式） -->
   <div
     v-if="goalOptions.length === 0 && mode === 'inline'"
-    class="w-full text-center py-3 text-sm text-gray-400"
+    class="w-full text-center py-3 text-sm text-gray-400 dark:text-gray-500"
   >
     <Icon icon="mdi:information-outline" width="16" class="mr-1" />
     当前没有可用目标，请先创建目标
@@ -111,7 +111,7 @@ function handleSubmit() {
     class="flex flex-wrap items-end gap-2 w-full"
   >
     <div class="flex-1 min-w-[160px]">
-      <label :for="FIELD_NAME" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_NAME" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         任务名称
       </label>
       <NInput
@@ -125,7 +125,7 @@ function handleSubmit() {
     </div>
 
     <div class="w-[140px]">
-      <label :for="FIELD_GOAL" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_GOAL" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         选择目标
       </label>
       <NSelect
@@ -140,7 +140,7 @@ function handleSubmit() {
     </div>
 
     <div class="w-[100px]">
-      <label :for="FIELD_QTY" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_QTY" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         数量（可选）
       </label>
       <NInputNumber
@@ -171,7 +171,7 @@ function handleSubmit() {
   <!-- modal：纵向排列 + 底部操作 -->
   <div v-else class="space-y-4">
     <div>
-      <label :for="FIELD_NAME" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_NAME" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         任务名称
       </label>
       <NInput
@@ -184,7 +184,7 @@ function handleSubmit() {
     </div>
 
     <div>
-      <label :for="FIELD_GOAL" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_GOAL" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         选择目标
       </label>
       <NSelect
@@ -198,7 +198,7 @@ function handleSubmit() {
     </div>
 
     <div>
-      <label :for="FIELD_QTY" class="block text-xs text-gray-500 mb-1">
+      <label :for="FIELD_QTY" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
         数量（可选）
       </label>
       <NInputNumber

@@ -202,11 +202,11 @@ onUnmounted(() => {
           <div
             v-for="t in tasks"
             :key="t.id"
-            class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-50"
+            class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-50 dark:hover:bg-surface-hover"
             role="listitem"
             :aria-label="getTaskAriaLabel(t)"
             :class="{
-              'bg-red-50': t.is_overdue,
+              'bg-red-50 dark:bg-red-500/15': t.is_overdue,
             }"
           >
             <NCheckbox
@@ -265,7 +265,7 @@ onUnmounted(() => {
                   </NTag>
                 </div>
 
-                <div class="text-xs text-gray-500 mt-0.5">
+                <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                   {{ t.actual_qty }}/{{ t.plan_qty }}{{ t.unit }}
                 </div>
               </div>
@@ -325,7 +325,7 @@ onUnmounted(() => {
 
       <!-- P2-4：日视图底部快速添加栏（R-05b 公共组件） -->
       <template #footer>
-        <div class="pt-3 border-t border-gray-100">
+        <div class="pt-3 border-t border-gray-100 dark:border-surface-borderMuted">
           <QuickTaskForm
             mode="inline"
             :goal-options="goalOptions"

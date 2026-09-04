@@ -79,7 +79,7 @@ function getLevelMeta(level: EncouragementLevel) {
       color: "default" as TagType,
       icon: "mdi:help-circle-outline",
       desc: "等级信息缺失",
-      iconColor: "text-gray-500",
+      iconColor: "text-gray-500 dark:text-gray-400",
     };
   }
   return LEVEL_META[level];
@@ -129,7 +129,7 @@ const LEVEL_META: Record<
     color: "default",
     icon: "mdi:heart-outline",
     desc: "连续中断或进度滞后时显示",
-    iconColor: "text-gray-500",
+    iconColor: "text-gray-500 dark:text-gray-400",
   },
 };
 
@@ -600,7 +600,7 @@ async function handleBatchUpdateLevel() {
           />
         </div>
       </div>
-      <div class="mt-3 text-xs text-gray-500">
+      <div class="mt-3 text-xs text-gray-500 dark:text-gray-400">
         规则：每天至少完成一个任务计为打卡；当天无任务不中断也不计入；当天有任务但未完成则中断。
       </div>
     </NCard>
@@ -719,7 +719,7 @@ async function handleBatchUpdateLevel() {
           {{ batchMode ? "取消批量" : "批量操作" }}
         </NButton>
       </NSpace>
-      <div class="mt-2 text-xs text-gray-500">
+      <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
         共 {{ filteredCustomList.length + filteredPresetList.length }} 条文案
       </div>
     </NCard>
@@ -762,8 +762,8 @@ async function handleBatchUpdateLevel() {
             class="p-3 rounded border text-sm flex items-start gap-2"
             :class="[
               item.category === 'preset'
-                ? 'enc-item-preset'
-                : 'enc-item-custom',
+                ? 'border-blue-100 bg-blue-50/50 dark:border-brand-400/40 dark:bg-brand-400/14'
+                : 'border-green-100 bg-green-50/50 dark:border-green-400/40 dark:bg-green-400/12',
               getDragClass(item),
             ]"
             draggable="true"
@@ -790,9 +790,9 @@ async function handleBatchUpdateLevel() {
             <Icon
               icon="mdi:format-quote-open"
               width="16"
-              class="text-gray-400 mt-0.5"
+              class="text-gray-400 dark:text-gray-500 mt-0.5"
             />
-            <span class="flex-1">{{ item.text }}</span>
+            <span class="flex-1 text-gray-700 dark:text-gray-300">{{ item.text }}</span>
             <NTag
               size="tiny"
               :bordered="false"
@@ -883,8 +883,10 @@ async function handleBatchUpdateLevel() {
           class="p-3 rounded border text-sm flex items-start gap-2"
           :class="[
             {
-              'border-blue-100 bg-blue-50/50': item.category === 'preset',
-              'border-green-100 bg-green-50/50': item.category === 'custom',
+              'border-blue-100 bg-blue-50/50 dark:border-brand-400/40 dark:bg-brand-400/14':
+                item.category === 'preset',
+              'border-green-100 bg-green-50/50 dark:border-green-400/40 dark:bg-green-400/12':
+                item.category === 'custom',
             },
           ]"
         >
@@ -897,9 +899,9 @@ async function handleBatchUpdateLevel() {
           <Icon
             icon="mdi:format-quote-open"
             width="16"
-            class="text-gray-400 mt-0.5"
+            class="text-gray-400 dark:text-gray-500 mt-0.5"
           />
-          <span class="flex-1">{{ item.text }}</span>
+          <span class="flex-1 text-gray-700 dark:text-gray-300">{{ item.text }}</span>
           <NTag
             size="tiny"
             :bordered="false"
@@ -993,16 +995,10 @@ async function handleBatchUpdateLevel() {
 <style scoped>
 /* ========== 鼓励语拖拽视觉反馈 ========== */
 
-/* ---- 列表项基础样式 ---- */
-.enc-item-preset {
-  border-color: #dbeafe;
-  background-color: rgba(239, 246, 255, 0.5);
-}
-
-.enc-item-custom {
-  border-color: #dcfce7;
-  background-color: rgba(240, 253, 244, 0.5);
-}
+/* ---- 列表项基础样式 ----
+   预设/自定义条目的背景色与边框色现由模板中的 UnoCSS 类控制
+   （浅色 bg-blue-50/bg-green-50，深色 dark:bg-brand-400/14、dark:bg-green-400/12），
+   此处不再为它们单独定义背景，避免与 UnoCSS 暗色规则冲突。 */
 
 /* ---- 拖拽源：半透明 + 缩小 ---- */
 .enc-dragging {
@@ -1017,6 +1013,11 @@ async function handleBatchUpdateLevel() {
 .enc-drag-over {
   background-color: rgba(238, 246, 255, 0.7) !important;
   border-color: #bcd9ff !important;
+}
+
+:global(.dark) .enc-drag-over {
+  background-color: rgba(89, 157, 255, 0.25) !important;
+  border-color: #599dff !important;
 }
 
 /* ---- 插入指示线（上方/下方） ---- */

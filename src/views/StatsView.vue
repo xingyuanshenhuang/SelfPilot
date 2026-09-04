@@ -31,6 +31,7 @@ import type {
 } from "@/types";
 import * as statsApi from "@/api/stats";
 import { format, subDays } from "date-fns";
+import { useSettingStore } from "@/stores/settingStore";
 
 echarts.use([
   BarChart,
@@ -54,6 +55,25 @@ const heatmapData = ref<HeatmapCell[]>([]);
 const heatmapRange = ref<90 | 180 | 365>(90);
 const predictions = ref<CompletionPrediction[]>([]);
 const loading = ref(false);
+
+const settingStore = useSettingStore();
+
+// 图表随深色模式切换的调色板
+const axisTextColor = computed(() =>
+  settingStore.isDark ? "#cfd3dc" : "#606266",
+);
+const axisLineColor = computed(() =>
+  settingStore.isDark ? "rgba(255,255,255,0.25)" : "#dcdfe6",
+);
+const splitLineColor = computed(() =>
+  settingStore.isDark ? "rgba(255,255,255,0.08)" : "#ebeef5",
+);
+const heatEmptyColor = computed(() =>
+  settingStore.isDark ? "rgba(255,255,255,0.08)" : "#ebedf0",
+);
+const heatBorderColor = computed(() =>
+  settingStore.isDark ? "#101014" : "#fff",
+);
 
 const barChartRef = ref<HTMLDivElement | null>(null);
 const lineChartRef = ref<HTMLDivElement | null>(null);
@@ -152,13 +172,13 @@ const PREDICTION_META: Record<
     label: "无截止",
     color: "default",
     icon: "mdi:calendar-remove",
-    iconColor: "text-gray-400",
+    iconColor: "text-gray-400 dark:text-gray-500",
   },
   no_data: {
     label: "无数据",
     color: "default",
     icon: "mdi:help-circle",
-    iconColor: "text-gray-400",
+    iconColor: "text-gray-400 dark:text-gray-500",
   },
   completed: {
     label: "已完成",
@@ -186,6 +206,7 @@ function renderBarChart() {
   const taskCounts = goalStats.value.map((g) => g.task_count);
 
   barChart.setOption({
+    textStyle: { color: axisTextColor.value },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "shadow" },
@@ -204,6 +225,8 @@ function renderBarChart() {
       type: "category",
       data: names,
       axisLabel: { interval: 0, rotate: names.length > 4 ? 30 : 0 },
+      axisLine: { lineStyle: { color: axisLineColor.value } },
+      axisTick: { lineStyle: { color: axisLineColor.value } },
     },
     yAxis: [
       {
@@ -211,6 +234,8 @@ function renderBarChart() {
         name: "完成度(%)",
         max: 100,
         axisLabel: { formatter: "{value}%" },
+        axisLine: { lineStyle: { color: axisLineColor.value } },
+        splitLine: { lineStyle: { color: splitLineColor.value } },
       },
     ],
     series: [
@@ -227,7 +252,12 @@ function renderBarChart() {
             return "#909399";
           },
         },
-        label: { show: true, position: "top", formatter: "{c}%" },
+        label: {
+          show: true,
+          position: "top",
+          formatter: "{c}%",
+          color: axisTextColor.value,
+        },
         barWidth: "50%",
       },
       {
@@ -258,6 +288,7 @@ function renderLineChart() {
   const countSeries = trend.value.map((t) => t.completed_count);
 
   lineChart.setOption({
+    textStyle: { color: axisTextColor.value },
     tooltip: {
       trigger: "axis",
       formatter: (params: any) => {
@@ -267,7 +298,7 @@ function renderLineChart() {
         return `${t.date}<br/>完成数量：${t.completed_qty}<br/>完成任务：${t.completed_count} 个`;
       },
     },
-    legend: { data: ["完成数量", "完成任务数"], top: 0 },
+    legend: { data: ["完成数量", "完成任务数"], top: 0, textStyle: { color: axisTextColor.value } },
     grid: {
       left: 50,
       right: 30,
@@ -277,14 +308,28 @@ function renderLineChart() {
     xAxis: {
       type: "category",
       data: dates,
+      axisLine: { lineStyle: { color: axisLineColor.value } },
+      axisTick: { lineStyle: { color: axisLineColor.value } },
       axisLabel: {
         interval: trendDays.value === 30 ? 4 : 0,
         rotate: trendDays.value === 30 ? 30 : 0,
       },
     },
     yAxis: [
-      { type: "value", name: "完成数量", minInterval: 1 },
-      { type: "value", name: "任务数", minInterval: 1 },
+      {
+        type: "value",
+        name: "完成数量",
+        minInterval: 1,
+        axisLine: { lineStyle: { color: axisLineColor.value } },
+        splitLine: { lineStyle: { color: splitLineColor.value } },
+      },
+      {
+        type: "value",
+        name: "任务数",
+        minInterval: 1,
+        axisLine: { lineStyle: { color: axisLineColor.value } },
+        splitLine: { lineStyle: { color: splitLineColor.value } },
+      },
     ],
     series: [
       {
@@ -345,11 +390,17 @@ function renderHeatmap() {
       orient: "horizontal",
       left: "center",
       bottom: 0,
+      textStyle: { color: axisTextColor.value },
       inRange: {
-        color: ["#ebedf0", "#c6e48b", "#7bc96f", "#239a3b", "#196127"],
+        color: [
+          heatEmptyColor.value,
+          "#c6e48b",
+          "#7bc96f",
+          "#239a3b",
+          "#196127",
+        ],
       },
       text: ["100%", "0%"],
-      textStyle: { fontSize: 11 },
     },
     calendar: {
       top: 60,
@@ -359,19 +410,19 @@ function renderHeatmap() {
       range: [start, today],
       itemStyle: {
         borderWidth: 2,
-        borderColor: "#fff",
-        color: "#ebedf0",
+        borderColor: heatBorderColor.value,
+        color: heatEmptyColor.value,
       },
       yearLabel: { show: false },
       dayLabel: {
         firstDay: 1,
         nameMap: "cn",
-        color: "#909399",
+        color: axisTextColor.value,
         fontSize: 11,
       },
       monthLabel: {
         nameMap: "cn",
-        color: "#606266",
+        color: axisTextColor.value,
         fontSize: 11,
       },
       splitLine: { show: false },
@@ -414,6 +465,14 @@ function handleResize() {
 onMounted(() => {
   window.addEventListener("resize", handleResize);
 });
+
+// 主题切换时用新配色重绘图表
+watch(
+  () => settingStore.isDark,
+  () => {
+    nextTick(renderCharts);
+  },
+);
 </script>
 
 <template>
@@ -480,7 +539,7 @@ onMounted(() => {
         </NRadioGroup>
       </template>
       <div ref="heatmapChartRef" style="height: 240px" />
-      <div class="mt-2 text-xs text-gray-500 text-center">
+      <div class="mt-2 text-xs text-gray-500 dark:text-gray-400 text-center">
         颜色深浅表示当日"完成任务量 / 计划任务总量"的完成比例
       </div>
     </NCard>
@@ -522,11 +581,11 @@ onMounted(() => {
         <div
           v-for="g in goalStats"
           :key="g.id"
-          class="flex items-center gap-3 p-3 rounded border border-gray-100"
-        >
-          <div class="flex-1">
-            <div class="font-medium">{{ g.name }}</div>
-            <div class="text-xs text-gray-500 mt-1">
+          class="flex items-center gap-3 p-3 rounded border border-gray-100 dark:border-surface-borderMuted"
+          >
+            <div class="flex-1">
+              <div class="font-medium">{{ g.name }}</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
               已完成 {{ g.done_count }}/{{ g.task_count }} 任务 · 累计
               {{ g.total_actual }}/{{ g.total_plan }}
             </div>
@@ -557,7 +616,7 @@ onMounted(() => {
         </div>
       </template>
       <template #header-extra>
-        <span class="text-xs text-gray-400">基于过去 7 天平均速度</span>
+        <span class="text-xs text-gray-400 dark:text-gray-500">基于过去 7 天平均速度</span>
       </template>
       <div v-if="predictions.length > 0" class="space-y-2">
         <div
@@ -565,11 +624,13 @@ onMounted(() => {
           :key="p.goal_id"
           class="p-3 rounded border flex items-start gap-3"
           :class="{
-            'border-green-100 bg-green-50/30':
+            'border-green-100 bg-green-50/30 dark:border-green-500/40 dark:bg-green-500/15':
               p.status === 'on_track' || p.status === 'completed',
-            'border-blue-100 bg-blue-50/30': p.status === 'ahead',
-            'border-red-100 bg-red-50/30': p.status === 'need_speed',
-            'border-gray-100':
+            'border-blue-100 bg-blue-50/30 dark:border-blue-500/40 dark:bg-blue-500/15':
+              p.status === 'ahead',
+            'border-red-100 bg-red-50/30 dark:border-red-500/40 dark:bg-red-500/15':
+              p.status === 'need_speed',
+            'border-gray-100 dark:border-surface-borderMuted':
               p.status === 'no_deadline' || p.status === 'no_data',
           }"
         >
@@ -587,7 +648,7 @@ onMounted(() => {
               </NTag>
             </div>
             <div
-              class="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
+              class="text-xs text-gray-500 dark:text-gray-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
             >
               <span>剩余 {{ p.remaining_qty }}/{{ p.total_qty }}</span>
               <span>日均速度 {{ p.avg_daily_speed.toFixed(1) }}</span>
@@ -597,14 +658,19 @@ onMounted(() => {
               <span v-if="p.predicted_date">
                 预计 {{ p.predicted_date }} 完成
               </span>
-              <span v-if="p.days_to_deadline !== null">
+              <!-- 已完成目标不再展示逾期/剩余天数提示 -->
+              <span
+                v-if="
+                  p.days_to_deadline !== null && p.status !== 'completed'
+                "
+              >
                 <template v-if="p.days_to_deadline < 0">
                   已逾期 {{ -p.days_to_deadline }} 天
                 </template>
                 <template v-else> 距截止 {{ p.days_to_deadline }} 天 </template>
               </span>
             </div>
-            <div class="text-sm mt-1.5 text-gray-700">
+            <div class="text-sm mt-1.5 text-gray-700 dark:text-gray-300">
               {{ p.suggestion }}
             </div>
           </div>

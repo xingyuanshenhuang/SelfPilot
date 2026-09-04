@@ -291,34 +291,34 @@ defineExpose({
               :aria-label="getDayAriaLabel(day, getDayStatsCached(day))"
               :aria-current="isToday(day) ? 'date' : undefined"
               :class="{
-                'bg-gray-50': !isSameMonth(day, currentDate) && !isToday(day),
-                'bg-brand-100 border-brand-500 border-2 shadow-md ring-2 ring-brand-300 ring-offset-1':
+                'bg-gray-50 dark:bg-surface-muted/40': !isSameMonth(day, currentDate) && !isToday(day),
+                'bg-brand-100 dark:bg-brand-500/25 border-brand-500 border-2 shadow-md ring-2 ring-brand-300 ring-offset-1 dark:ring-offset-surface-card':
                   isToday(day),
-                'ring-2 ring-brand-400 ring-offset-1 bg-blue-50':
+                'ring-2 ring-brand-400 ring-offset-1 dark:ring-offset-surface-card bg-blue-50 dark:bg-blue-500/20':
                   isMonthCellFocusable(day) && !isToday(day),
-                'hover:bg-blue-50': !isToday(day) && !isMonthCellFocusable(day),
-                'hover:bg-brand-200': isToday(day),
-                'bg-green-50':
+                'hover:bg-blue-50 dark:hover:bg-blue-500/15': !isToday(day) && !isMonthCellFocusable(day),
+                'hover:bg-brand-200 dark:hover:bg-brand-500/35': isToday(day),
+                'bg-green-50 dark:bg-green-500/15':
                   isSameMonth(day, currentDate) &&
                   !isToday(day) &&
                   !isMonthCellFocusable(day) &&
                   getLoadLevel(day) === 'low',
-                'bg-yellow-50':
+                'bg-yellow-50 dark:bg-yellow-500/15':
                   isSameMonth(day, currentDate) &&
                   !isToday(day) &&
                   !isMonthCellFocusable(day) &&
                   getLoadLevel(day) === 'medium',
-                'bg-red-50':
+                'bg-red-50 dark:bg-red-500/15':
                   isSameMonth(day, currentDate) &&
                   !isToday(day) &&
                   !isMonthCellFocusable(day) &&
                   getLoadLevel(day) === 'high',
-                'bg-purple-50':
+                'bg-purple-50 dark:bg-purple-500/15':
                   isSameMonth(day, currentDate) &&
                   !isToday(day) &&
                   !isMonthCellFocusable(day) &&
                   getLoadLevel(day) === 'extreme',
-                'ring-2 ring-brand-500 bg-brand-50': isDragTarget(day),
+                'ring-2 ring-brand-500 bg-brand-50 dark:bg-brand-500/25': isDragTarget(day),
               }"
               @click="handleClick(day)"
               @dblclick.stop="handleDblclick(day, $event)"
@@ -331,7 +331,7 @@ defineExpose({
               <div
                 class="text-center text-sm font-semibold"
                 :class="{
-                  'text-brand-600 font-bold text-base': isToday(day),
+                  'text-brand-600 dark:text-brand-400 font-bold text-base': isToday(day),
                   'text-gray-400':
                     !isSameMonth(day, currentDate) && !isToday(day),
                 }"
@@ -359,7 +359,7 @@ defineExpose({
                     cy="13"
                     r="10"
                     fill="none"
-                    stroke="#f3f4f6"
+                    class="month-load-ring-track"
                     stroke-width="3"
                   />
                   <circle
@@ -430,7 +430,7 @@ defineExpose({
           <!-- hover 预览弹层 -->
           <div class="space-y-1" role="list" aria-label="当日任务预览">
             <div
-              class="text-xs text-gray-500 mb-1 flex items-center gap-2 pb-1 border-b border-gray-100"
+              class="text-xs text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2 pb-1 border-b border-gray-100 dark:border-surface-borderMuted"
             >
               <Icon icon="mdi:speedometer" width="12" />
               负载：{{ getLoadOfDay(day) }}
@@ -480,5 +480,13 @@ defineExpose({
 .calendar-cell:focus-visible {
   outline: 2px solid #3478f6;
   outline-offset: 2px;
+}
+/* 负载圆环底色轨：浅色模式为浅灰，深色模式使用半透明白 */
+.month-load-ring-track {
+  stroke: #f3f4f6;
+}
+
+:global(.dark) .month-load-ring-track {
+  stroke: rgba(255, 255, 255, 0.16);
 }
 </style>

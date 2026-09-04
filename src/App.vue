@@ -53,6 +53,19 @@ onMounted(async () => {
   await settingStore.loadTheme();
 });
 
+// 根据主题状态在 html 上切换 .dark 类，驱动 UnoCSS 的 dark: 变体，
+// 并在切换时挂载短暂的 transition 类实现颜色平滑过渡
+watch(
+  () => settingStore.isDark,
+  (isDark) => {
+    const root = document.documentElement;
+    root.classList.add("theme-transition");
+    root.classList.toggle("dark", isDark);
+    window.setTimeout(() => root.classList.remove("theme-transition"), 400);
+  },
+  { immediate: true },
+);
+
 const menuOptions: MenuOption[] = [
   {
     label: "目标总览",
@@ -193,7 +206,7 @@ const encouragementIcon = computed(() => {
 const encouragementHeaderColor = computed(() => {
   if (taskStore.isCelebration) return "text-orange-500";
   if (taskStore.isMilestone) return "text-purple-600";
-  return "text-brand-600";
+  return "text-brand-600 dark:text-brand-400";
 });
 const encouragementBodyIcon = computed(() => {
   if (taskStore.isCelebration) return "mdi:trophy";
@@ -228,7 +241,7 @@ const decoratedEncouragement = computed<Encouragement | null>(() => {
             collapse-mode="width"
           >
             <div
-              class="logo flex items-center gap-2 px-4 py-4 text-lg font-bold text-brand-600"
+              class="logo flex items-center gap-2 px-4 py-4 text-lg font-bold text-brand-600 dark:text-brand-400"
             >
               <Icon icon="mdi:rocket-launch" width="24" />
               <span v-if="true">SelfPilot</span>
@@ -285,7 +298,7 @@ const decoratedEncouragement = computed<Encouragement | null>(() => {
               width="48"
               :class="[encouragementBodyColor, 'mx-auto mb-3']"
             />
-            <div class="text-base text-gray-700 px-4 leading-relaxed">
+            <div class="text-base text-gray-700 dark:text-gray-300 px-4 leading-relaxed">
               {{ decoratedEncouragement?.text }}
             </div>
           </div>
@@ -321,5 +334,24 @@ body,
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 深色模式下兜底页面背景，与 Naive UI darkTheme bodyColor(#101014) 保持一致 */
+html.dark body {
+  background-color: #101014;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* 主题切换期间对颜色类做平滑过渡（仅切换瞬间生效，避免影响日常交互性能） */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease,
+    border-color 0.35s ease,
+    fill 0.35s ease,
+    stroke 0.35s ease !important;
 }
 </style>

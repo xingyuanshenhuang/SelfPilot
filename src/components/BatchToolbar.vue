@@ -40,7 +40,7 @@ const emit = defineEmits<BatchToolbarEmits>();
 <template>
   <div
     class="flex items-center justify-between gap-2"
-    :class="bordered ? 'mb-3 pb-2 border-b border-gray-100' : ''"
+    :class="bordered ? 'mb-3 pb-2 border-b border-gray-100 dark:border-surface-borderMuted' : ''"
   >
     <!-- 左侧内容（如操作提示），默认留空 -->
     <slot name="leading" />
@@ -58,7 +58,7 @@ const emit = defineEmits<BatchToolbarEmits>();
       </NButton>
       <span
         v-if="selectedCount > 0"
-        class="text-xs text-gray-500 self-center"
+        class="text-xs text-gray-500 dark:text-gray-400 self-center"
         role="status"
         aria-live="polite"
       >

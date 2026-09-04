@@ -1220,7 +1220,7 @@ provide(goalTreeApiKey, treeApi);
 
     <!-- 提示 -->
     <div
-      class="text-xs text-gray-400 flex items-start gap-1 bg-gray-50 px-3 py-1.5 rounded"
+      class="text-xs text-gray-400 flex items-start gap-1 bg-gray-50 dark:bg-surface-muted px-3 py-1.5 rounded"
     >
       <Icon icon="mdi:information-outline" width="14" class="mt-0.5 shrink-0" />
       <span>
@@ -1302,7 +1302,7 @@ provide(goalTreeApiKey, treeApi);
             style="width: 100%"
           />
           <template #feedback>
-            <span class="text-gray-400 text-xs">
+            <span class="text-gray-400 dark:text-gray-500 text-xs">
               设置后，使用"自动拆解"的"按时间预算"策略时将预填此值
             </span>
           </template>
@@ -1341,7 +1341,7 @@ provide(goalTreeApiKey, treeApi);
         </NFormItem>
         <div
           v-if="selectedTemplate"
-          class="text-xs text-gray-500 flex items-start gap-1 bg-blue-50 px-3 py-2 rounded"
+          class="text-xs text-gray-500 dark:text-gray-400 flex items-start gap-1 bg-blue-50 dark:bg-blue-500/15 px-3 py-2 rounded"
         >
           <Icon
             :icon="selectedTemplate.icon"
@@ -1353,7 +1353,7 @@ provide(goalTreeApiKey, treeApi);
 
         <!-- 总目标信息 -->
         <div class="border-t pt-3 space-y-2">
-          <div class="text-sm font-medium text-gray-600">总目标</div>
+          <div class="text-sm font-medium text-gray-600 dark:text-gray-300">总目标</div>
           <NFormItem label="目标名称" :show-feedback="false" required>
             <NInput
               v-model:value="templateForm.parent_name"
@@ -1377,7 +1377,7 @@ provide(goalTreeApiKey, treeApi);
           class="border-t pt-3 space-y-2"
         >
           <div
-            class="text-sm font-medium text-gray-600 flex items-center gap-1"
+            class="text-sm font-medium text-gray-600 dark:text-gray-300 flex items-center gap-1"
           >
             <Icon icon="mdi:flag-outline" width="16" class="text-blue-500" />
             阶段 {{ idx + 1 }}
@@ -1409,7 +1409,7 @@ provide(goalTreeApiKey, treeApi);
 
         <!-- 使用说明 -->
         <div
-          class="text-xs text-gray-400 flex items-start gap-1 bg-gray-50 px-3 py-2 rounded"
+          class="text-xs text-gray-400 flex items-start gap-1 bg-gray-50 dark:bg-surface-muted px-3 py-2 rounded"
         >
           <Icon
             icon="mdi:lightbulb-outline"
@@ -1437,7 +1437,7 @@ provide(goalTreeApiKey, treeApi);
       style="width: 520px"
     >
       <div class="space-y-4">
-        <div class="text-sm text-gray-600">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
           目标：<strong>{{ splitForm.goal_name }}</strong>
         </div>
 
@@ -1456,7 +1456,7 @@ provide(goalTreeApiKey, treeApi);
           </NRadioGroup>
         </NFormItem>
         <div
-          class="text-xs text-blue-600 bg-blue-50 px-3 py-2 rounded flex items-start gap-1"
+          class="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/15 px-3 py-2 rounded flex items-start gap-1"
         >
           <Icon
             icon="mdi:information-outline"
@@ -1558,8 +1558,12 @@ provide(goalTreeApiKey, treeApi);
         <!-- 预览 -->
         <div
           v-if="splitPreview"
-          class="border-t pt-3 text-sm bg-gray-50 px-3 py-2 rounded space-y-1"
-          :class="splitPreview.error ? 'text-red-500' : 'text-gray-600'"
+          class="border-t pt-3 text-sm bg-gray-50 dark:bg-surface-muted px-3 py-2 rounded space-y-1"
+          :class="
+            splitPreview.error
+              ? 'text-red-500'
+              : 'text-gray-600 dark:text-gray-300'
+          "
         >
           <div v-if="!splitPreview.error">
             <Icon icon="mdi:chart-bar" class="inline-block mr-1" />
@@ -1568,7 +1572,7 @@ provide(goalTreeApiKey, treeApi);
             >{{ splitForm.unit }}， 跨越
             <strong>{{ splitPreview.spanDays }}</strong> 天
           </div>
-          <div v-if="splitPreview.detail" class="text-xs text-gray-500 pl-5">
+          <div v-if="splitPreview.detail" class="text-xs text-gray-500 dark:text-gray-400 pl-5">
             {{ splitPreview.detail }}
           </div>
           <div v-if="splitPreview.error" class="flex items-start gap-1">
@@ -1612,7 +1616,7 @@ provide(goalTreeApiKey, treeApi);
         <!-- 重复开关（仅创建模式显示） -->
         <div v-if="taskModalMode === 'create'" class="flex items-center gap-2">
           <NCheckbox v-model:checked="taskForm.is_repeat"> 重复任务 </NCheckbox>
-          <span class="text-xs text-gray-400">
+          <span class="text-xs text-gray-400 dark:text-gray-500">
             {{
               taskForm.is_repeat
                 ? "在日期范围内按频率生成多个任务"
@@ -1722,14 +1726,14 @@ provide(goalTreeApiKey, treeApi);
         </NFormItem>
         <div
           v-if="taskModalMode === 'edit' && taskForm.dependency_ids.length > 0"
-          class="text-xs text-gray-500 bg-gray-50 px-3 py-2 rounded"
+          class="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-surface-muted px-3 py-2 rounded"
         >
           <Icon icon="mdi:link-variant" class="inline-block mr-1" />
           本任务将在所有前置任务完成后解锁
         </div>
         <div
           v-if="taskModalMode === 'create'"
-          class="text-xs text-blue-500 bg-blue-50 px-3 py-2 rounded"
+          class="text-xs text-blue-500 bg-blue-50 dark:bg-blue-500/15 px-3 py-2 rounded"
         >
           <Icon icon="mdi:information" class="inline-block mr-1" />
           纯文字类任务（如练习题）可勾选"重复任务"按每天/每周/每月生成；视频/数量类任务请使用"自动拆解"
@@ -1753,10 +1757,10 @@ provide(goalTreeApiKey, treeApi);
       style="width: 420px"
     >
       <div class="space-y-3">
-        <div class="text-sm text-gray-600">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
           任务：<strong>{{ backfillForm.task_name }}</strong>
         </div>
-        <div class="text-xs text-gray-400">
+        <div class="text-xs text-gray-400 dark:text-gray-500">
           计划数量：{{ backfillForm.plan_qty }}{{ backfillForm.unit }}
         </div>
         <NFormItem label="实际完成量" :show-feedback="false">
@@ -1786,7 +1790,7 @@ provide(goalTreeApiKey, treeApi);
       style="width: 720px"
     >
       <div v-if="replanPreview" class="space-y-3">
-        <div class="text-sm text-gray-600 space-y-1">
+        <div class="text-sm text-gray-600 dark:text-gray-300 space-y-1">
           <div>
             目标：<strong>{{ replanPreview.goal_name }}</strong>
           </div>
