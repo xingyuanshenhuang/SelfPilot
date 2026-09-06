@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import * as taskApi from "@/api/task";
 import * as encApi from "@/api/encouragement";
 import * as statsApi from "@/api/stats";
+import { useEncouragementStore } from "@/stores/encouragementStore";
 import type {
   TodayTask,
   CompleteTaskInput,
@@ -46,9 +47,7 @@ export const useTaskStore = defineStore("task", () => {
   // 所有视图（目标总览 / 目标树 / 日历）的完成、补完成一律经由此处，
   // 集中处理：开关(enabled)、频率(frequency)、风格(style)、庆祝、emoji 装饰。
   /** 设置装载状态（懒加载，避免首次调用时 settings 尚未拉取） */
-  // 注意：encStore 在函数体内延迟获取，避免与 encouragementStore 循环依赖
   async function maybeShowEncouragement(first: boolean) {
-    const { useEncouragementStore } = await import("@/stores/encouragementStore");
     const encStore = useEncouragementStore();
     if (!encStore.loaded) await encStore.fetchSettings();
 

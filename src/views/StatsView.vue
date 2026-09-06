@@ -244,12 +244,18 @@ function renderBarChart() {
         type: "bar",
         data: percentages,
         itemStyle: {
+          // 方案二「冷静清爽」：每目标一色，便于区分；首色对齐项目品牌蓝 #3478f6
           color: (params: any) => {
-            const v = params.value as number;
-            if (v >= 80) return "#67c23a";
-            if (v >= 50) return "#e6a23c";
-            if (v >= 20) return "#f56c6c";
-            return "#909399";
+            const palette = [
+              "#3478f6", // 品牌蓝
+              "#28C4D9", // 湖青
+              "#4BC0A9", // 薄荷绿
+              "#9AC85A", // 草木绿
+              "#FFC84B", // 柠檬黄
+              "#FF8A5C", // 暖沙橙
+              "#C77EB0", // 丁香紫
+            ];
+            return palette[(params.dataIndex ?? 0) % palette.length];
           },
         },
         label: {

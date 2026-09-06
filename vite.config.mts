@@ -5,11 +5,19 @@ import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 import { NaiveUiResolver } from "unplugin-vue-components/resolvers";
 import path from "node:path";
+import { generateMdiSubset } from "./scripts/mdi-subset.mjs";
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
   plugins: [
+    // 启动/构建时扫描源码里的 mdi:*，自动重建本地图标子集（新增图标无需手动跑脚本）
+    {
+      name: "mdi-subset",
+      buildStart() {
+        generateMdiSubset();
+      },
+    },
     vue(),
     UnoCSS(),
     AutoImport({

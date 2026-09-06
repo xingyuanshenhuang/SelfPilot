@@ -48,9 +48,10 @@ const SettingsView = defineAsyncComponent(
   () => import("./views/SettingsView.vue"),
 );
 
-// 启动时从后端加载主题设置
+// 启动时从后端加载主题与图标模式设置
 onMounted(async () => {
   await settingStore.loadTheme();
+  await settingStore.loadIconMode();
 });
 
 // 根据主题状态在 html 上切换 .dark 类，驱动 UnoCSS 的 dark: 变体，

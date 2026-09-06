@@ -82,6 +82,16 @@ async function handleThemeChange(value: "light" | "dark") {
   message.success(value === "dark" ? "已切换到深色主题" : "已切换到浅色主题");
 }
 
+/** 切换图标加载模式：本地立即生效；联网需重启后完全生效 */
+async function handleIconModeChange(value: "local" | "online") {
+  await settingStore.setIconMode(value);
+  if (value === "local") {
+    message.success("已切换为本地图标，立即生效，离线可用");
+  } else {
+    message.info("已切换为联网加载，重启应用后完全生效");
+  }
+}
+
 /** 解析 JSON 备份文件摘要 */
 function parseExportSummary(jsonStr: string): ExportSummary | null {
   try {
@@ -298,6 +308,49 @@ async function handleNativeRestore() {
             深色
           </NRadioButton>
         </NRadioGroup>
+      </NSpace>
+    </NCard>
+
+    <!-- 图标加载模式 -->
+    <NCard :bordered="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <Icon
+            icon="mdi:image-multiple-outline"
+            width="20"
+            class="text-green-500"
+          />
+          <span>图标加载模式</span>
+        </div>
+      </template>
+      <NSpace vertical :size="12">
+        <NRadioGroup
+          :value="settingStore.iconMode"
+          @update:value="handleIconModeChange"
+        >
+          <NRadioButton value="local">
+            <template #icon><Icon icon="mdi:harddisk" /></template>
+            本地（推荐）
+          </NRadioButton>
+          <NRadioButton value="online">
+            <template #icon><Icon icon="mdi:cloud-download-outline" /></template>
+            联网
+          </NRadioButton>
+        </NRadioGroup>
+        <div class="text-xs text-gray-400 dark:text-gray-500 space-y-0.5">
+          <div class="flex items-center gap-1">
+            <Icon icon="mdi:harddisk" width="12" />
+            本地 — 图标已内置应用，离线可用，首次启动无需联网
+          </div>
+          <div class="flex items-center gap-1">
+            <Icon icon="mdi:cloud-download-outline" width="12" />
+            联网 — 按需从网络加载图标，需保持网络连接
+          </div>
+          <div class="flex items-center gap-1">
+            <Icon icon="mdi:resize" width="12" />
+            两种模式渲染的图标完全相同，切换不影响尺寸与外观
+          </div>
+        </div>
       </NSpace>
     </NCard>
 
