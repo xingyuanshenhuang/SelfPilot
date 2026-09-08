@@ -113,7 +113,7 @@ const LEVEL_META: Record<
   highlight: {
     label: "高亮",
     color: "warning",
-    icon: "mdi:emoticon-star-outline",
+    icon: "mdi:star-four-points-outline",
     desc: "连续 7 天完成时抽取",
     iconColor: "text-orange-500",
   },

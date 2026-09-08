@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod error;
+mod portable;
 mod services;
 mod util;
 
@@ -9,12 +10,21 @@ use std::str::FromStr;
 use tauri::Manager;
 
 pub fn run() {
+    // 便携模式：将 WebView2 用户数据/缓存重定向到 <exe同级>/data/webview，
+    // 避免写入 %LOCALAPPDATA%。须在首个 WebView 环境创建前设置（wry 对空
+    // userDataFolder 回退读取该环境变量），非便携模式无此目录则跳过。
+    if let Some(webview_dir) = portable::portable_webview_dir() {
+        if std::fs::create_dir_all(&webview_dir).is_ok() {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_dir);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // 获取应用数据目录并创建
-            let app_dir = app.path().app_data_dir()?;
+            // 获取应用数据目录并创建（便携模式走 portable::resolve_app_dir）
+            let app_dir = portable::resolve_app_dir(app.handle())?;
             std::fs::create_dir_all(&app_dir)?;
 
             // S-04 (SEC-M-04)：初始化 tracing 日志，按天滚动写入应用数据目录 logs/

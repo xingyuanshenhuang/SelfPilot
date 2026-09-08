@@ -553,7 +553,7 @@ async function handleNativeRestore() {
             跳过 — 保留本地数据，不导入冲突项
           </div>
           <div class="flex items-center gap-1">
-            <Icon icon="mdi:overwrite" width="12" />
+            <Icon icon="mdi:file-replace" width="12" />
             覆盖 — 用导入数据替换本地冲突项
           </div>
           <div class="flex items-center gap-1">

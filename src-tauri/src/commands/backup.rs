@@ -1,5 +1,5 @@
 use std::io::Read;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use validator::Validate;
 
 use crate::db::models::{
@@ -575,11 +575,8 @@ pub async fn restore_database(
     // S-02: 校验路径安全性 + SQLite 魔术字（防止恢复非数据库文件导致数据损坏）
     validate_path_scope(&source_path, true)?;
 
-    // 获取当前 db 路径
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Internal(format!("获取应用数据目录失败: {}", e)))?;
+    // 获取当前 db 路径（便携模式走 portable::resolve_app_dir）
+    let app_dir = crate::portable::resolve_app_dir(&app)?;
     let db_path = app_dir.join("selfpilot.db");
     let backup_path = app_dir.join("selfpilot.db.before_restore");
 
