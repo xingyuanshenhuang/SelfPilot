@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SelfPilot：安装时数据库存储路径（MSI 命令行属性方式）
+     用法：msiexec /i SelfPilot_x64.msi DATADIR="D:\MyData"
+     DATADIR 属性非空时写入 HKCU\Software\com.selfpilot.desktop\DataDir，
+     由应用 portable.rs 在运行时读取；不传 DATADIR 时不写不删。
+     Permanent="yes" 保证卸载/升级（MajorUpgrade 移除旧产品）不清除该值。 -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <Property Id="DATADIR" Secure="yes" />
+    <ComponentGroup Id="DataDirComponentGroup">
+      <Component Id="DataDirRegistry" Directory="INSTALLDIR"
+                 Guid="0BEB7A23-1A26-46A9-8766-ED8E4384E6E1" Permanent="yes">
+        <Condition><![CDATA[DATADIR <> ""]]></Condition>
+        <RegistryValue Root="HKCU" Key="Software\com.selfpilot.desktop"
+                       Name="DataDir" Type="string" Value="[DATADIR]" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -30,6 +30,10 @@ tracing-appender = "0.2"
 # S-05 (SEC-M-05)：入参校验
 validator = { version = "0.18", features = ["derive"] }
 
+# Windows 安装时自定义数据目录（注册表读取，见 portable.rs）
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [profile.dev]
 incremental = true
 

@@ -25,3 +25,10 @@ LangString webview2Downloading ${LANG_SIMPCHINESE} "正在下载 WebView2 引导
 LangString webview2InstallError ${LANG_SIMPCHINESE} "错误：安装 WebView2 失败，退出代码 $1"
 LangString webview2InstallSuccess ${LANG_SIMPCHINESE} "WebView2 已成功安装"
 LangString deleteAppData ${LANG_SIMPCHINESE} "删除应用程序数据"
+; 数据库存储路径选择页（SelfPilot-DATADIR）
+LangString dataDirPageTitle ${LANG_SIMPCHINESE} "选择数据库存储位置"
+LangString dataDirPageSubtitle ${LANG_SIMPCHINESE} "设置 ${PRODUCTNAME} 数据库文件的保存目录"
+LangString dataDirPageHint ${LANG_SIMPCHINESE} "请选择数据库存储位置，默认使用应用安装目录。可手动输入，或点击“浏览...”选择文件夹"
+LangString dataDirBrowse ${LANG_SIMPCHINESE} "浏览..."
+LangString dataDirBrowseTitle ${LANG_SIMPCHINESE} "选择数据库存储文件夹"
+LangString dataDirPreviewPrefix ${LANG_SIMPCHINESE} "数据库文件将保存到："

@@ -42,10 +42,13 @@
         "languages": ["SimpChinese"],
         "customLanguageFiles": {
           "SimpChinese": "nsis/SimpChinese.nsh"
-        }
+        },
+        "template": "nsis/installer.nsi"
       },
       "wix": {
-        "language": ["zh-CN"]
+        "language": ["zh-CN"],
+        "fragmentPaths": ["wix/datadir.wxs"],
+        "componentGroupRefs": ["DataDirComponentGroup"]
       }
     }
   }

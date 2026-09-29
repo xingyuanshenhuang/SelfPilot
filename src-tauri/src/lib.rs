@@ -41,6 +41,10 @@ pub fn run() {
                 )
                 .init();
 
+            // 平滑迁移：将旧默认位置（%APPDATA%）的数据库复制到安装路径（若有），
+            // 需在连接 SQLite 前执行；幂等，绝不覆盖目标已有库。
+            portable::migrate_legacy_database(app.handle(), &app_dir)?;
+
             // 构建 SQLite 数据库连接
             let db_path = app_dir.join("selfpilot.db");
             let db_url = format!("sqlite://{}?mode=rwc", db_path.display());

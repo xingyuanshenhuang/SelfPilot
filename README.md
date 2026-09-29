@@ -218,6 +218,21 @@ npm run tauri:build
 - macOS：`.dmg` / `.app`
 - Linux：`.deb` / `.AppImage`
 
+#### 安装时自定义数据库存储路径（仅 Windows）
+
+数据库与日志默认存放在 **应用安装路径（exe 同级目录）** 下的 `selfpilot.db` 与 `logs\`。若检测到旧版本数据位于 `%APPDATA%\com.selfpilot.desktop\`，首次启动会自动复制到安装路径（原文件保留为安全网），无需手动迁移。
+
+- **exe 安装包（NSIS）**：安装向导中"安装目录"页之后提供「选择数据库存储位置」页，默认建议为应用安装目录（安装器自动识别 32/64 位系统），可手动输入路径，或点击「浏览...」打开标准文件夹树对话框选择目录，页面实时预览最终数据库文件路径。静默安装可通过参数指定：`SelfPilot-setup.exe /S /DATADIR=D:\MyData`。
+- **msi 安装包（MSI）**：受 Tauri 限制无法添加安装页面，通过命令行属性指定：`msiexec /i SelfPilot_x64.msi DATADIR="D:\MyData"`（不传 DATADIR 则使用默认安装路径）。
+
+所选路径写入注册表 `HKCU\Software\com.selfpilot.desktop` 的 `DataDir` 值，优先于默认安装路径，卸载/升级不清除（重装时自动预填旧值）。重置为安装路径默认：
+
+```bat
+reg delete HKCU\Software\com.selfpilot.desktop /v DataDir /f
+```
+
+注意：exe 同级存在 `portable.flag` 时为便携模式，数据目录固定为 exe 同级 `data/`，优先级最高。
+
 ### 可用脚本
 
 | 命令                  | 说明                                |
