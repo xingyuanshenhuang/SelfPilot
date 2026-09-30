@@ -36,6 +36,8 @@ import type {
   CreateGoalInput,
   UpdateGoalInput,
   RepeatSplitInput,
+  RepeatSeries,
+  UpdateRepeatSeriesInput,
   SmartSplitInput,
   SplitStrategy,
 } from "@/types";
@@ -94,7 +96,7 @@ const expandedNodes = ref<Set<string>>(new Set());
 
 // ===== 任务创建/编辑弹窗 =====
 const showTaskModal = ref(false);
-const taskModalMode = ref<"create" | "edit">("create");
+const taskModalMode = ref<"create" | "edit" | "edit_repeat">("create");
 const taskForm = reactive({
   task_id: "",
   goal_id: "",
@@ -767,6 +769,47 @@ async function handleSaveTask() {
       showTaskModal.value = false;
       await goalStore.fetchGoalTree();
       await goalStore.fetchProgresses();
+    } else if (taskModalMode.value === "edit_repeat") {
+      // 编辑原任务：级联更新整个重复系列（实例集合可能变化，全量重拉校准）
+      if (!taskForm.plan_date) {
+        message.warning("请选择起始日期");
+        return;
+      }
+      if (!taskForm.end_date) {
+        message.warning("重复任务请选择结束日期");
+        return;
+      }
+      if (taskForm.frequency === "weekly" && taskForm.weekdays.length === 0) {
+        message.warning("请至少选择一个周几");
+        return;
+      }
+      if (
+        taskForm.frequency === "monthly" &&
+        taskForm.month_days.length === 0
+      ) {
+        message.warning("请至少选择一个日期");
+        return;
+      }
+      const start_date = format(new Date(taskForm.plan_date), "yyyy-MM-dd");
+      const end_date = format(new Date(taskForm.end_date), "yyyy-MM-dd");
+      const input: UpdateRepeatSeriesInput = {
+        series_id: taskForm.task_id,
+        base_name: taskForm.name,
+        plan_qty: taskForm.plan_qty,
+        unit: taskForm.unit,
+        frequency: taskForm.frequency,
+        start_date,
+        end_date,
+        weekdays:
+          taskForm.frequency === "weekly" ? taskForm.weekdays : undefined,
+        month_days:
+          taskForm.frequency === "monthly" ? taskForm.month_days : undefined,
+      };
+      await goalApi.updateRepeatSeries(input);
+      message.success("原任务已更新，重复任务已同步");
+      showTaskModal.value = false;
+      await goalStore.fetchGoalTree();
+      await goalStore.fetchProgresses();
     } else {
       // 编辑模式：P2-3 局部更新，避免全量重拉
       const plan_date = taskForm.plan_date
@@ -848,6 +891,39 @@ async function openEditTaskModal(task: Task) {
     const ids = deps.map((d) => d.id);
     taskForm.dependency_ids = ids;
     originalDependencyIds.value = [...ids];
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+/** 编辑原任务：从任意重复任务实例打开原任务设置弹窗 */
+async function openEditRepeatModal(task: Task) {
+  if (!task.repeat_series_id) return;
+  try {
+    const series: RepeatSeries | null = await goalApi.getRepeatSeries(
+      task.repeat_series_id,
+    );
+    if (!series) {
+      message.warning("该任务不属于可编辑的重复系列");
+      return;
+    }
+    taskModalMode.value = "edit_repeat";
+    taskForm.task_id = series.id;
+    taskForm.goal_id = series.goal_id;
+    taskForm.name = series.base_name;
+    taskForm.plan_date = parseISO(series.start_date).getTime();
+    taskForm.end_date = series.end_date
+      ? parseISO(series.end_date).getTime()
+      : null;
+    taskForm.plan_qty = series.plan_qty;
+    taskForm.unit = series.unit;
+    taskForm.frequency = series.frequency;
+    taskForm.weekdays = [...series.weekdays];
+    taskForm.month_days = [...series.month_days];
+    taskForm.is_repeat = true;
+    taskForm.dependency_ids = [];
+    originalDependencyIds.value = [];
+    showTaskModal.value = true;
   } catch (e) {
     message.error(String(e));
   }
@@ -1030,6 +1106,14 @@ function buildTaskActions(task: Task): DropdownOption[] {
     key: "backfill",
     icon: () => h(Icon, { icon: "mdi:history" }),
   });
+  // 重复任务实例：可编辑原任务并级联更新整个系列
+  if (task.source === "auto" && task.repeat_series_id) {
+    actions.push({
+      label: "编辑原任务",
+      key: "edit_repeat",
+      icon: () => h(Icon, { icon: "mdi:file-document-edit-outline" }),
+    });
+  }
   actions.push({
     label: "编辑",
     key: "edit",
@@ -1057,6 +1141,9 @@ function handleTaskAction(key: string, task: Task) {
       break;
     case "edit":
       openEditTaskModal(task);
+      break;
+    case "edit_repeat":
+      openEditRepeatModal(task);
       break;
     case "delete": {
       const batch = getBatchTasks(task);
@@ -1603,7 +1690,13 @@ provide(goalTreeApiKey, treeApi);
     <NModal
       v-model:show="showTaskModal"
       preset="card"
-      :title="taskModalMode === 'create' ? '添加任务' : '编辑任务'"
+      :title="
+        taskModalMode === 'create'
+          ? '添加任务'
+          : taskModalMode === 'edit_repeat'
+            ? '编辑原任务'
+            : '编辑任务'
+      "
       style="width: 500px"
     >
       <div class="space-y-3">
@@ -1624,8 +1717,8 @@ provide(goalTreeApiKey, treeApi);
             }}
           </span>
         </div>
-        <!-- 频率选择（仅创建模式 + 重复任务时显示） -->
-        <div v-if="taskModalMode === 'create' && taskForm.is_repeat">
+        <!-- 频率选择（创建模式或编辑原任务 + 重复任务时显示） -->
+        <div v-if="taskForm.is_repeat && taskModalMode !== 'edit'">
           <NFormItem label="频率" :show-feedback="false">
             <NRadioGroup v-model:value="taskForm.frequency">
               <NRadio
@@ -1682,7 +1775,7 @@ provide(goalTreeApiKey, treeApi);
             />
           </NFormItem>
           <NFormItem
-            v-if="taskForm.is_repeat && taskModalMode === 'create'"
+            v-if="taskForm.is_repeat && taskModalMode !== 'edit'"
             label="结束日期"
             :show-feedback="false"
           >

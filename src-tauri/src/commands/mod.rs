@@ -26,6 +26,8 @@ pub fn build_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send
         goal::split_by_capacity,
         goal::smart_split,
         goal::repeat_split,
+        goal::get_repeat_series,
+        goal::update_repeat_series,
         goal::replan_preview,
         goal::replan_goal,
         goal::move_goal,

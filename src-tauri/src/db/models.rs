@@ -212,6 +212,82 @@ pub struct RepeatSplitInput {
     pub month_days: Option<Vec<u8>>,
 }
 
+/// 重复任务系列（原任务）：保存"添加任务-重复任务"生成时的原任务设置，
+/// 支持从任意实例"编辑原任务"并级联更新所有实例。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepeatSeries {
+    pub id: String,
+    pub goal_id: String,
+    /// 基础名称（不含" - 第N次"后缀）
+    pub base_name: String,
+    pub plan_qty: f64,
+    pub unit: String,
+    /// 频率：daily | weekly | monthly
+    pub frequency: String,
+    /// 起始日期 yyyy-MM-dd
+    pub start_date: String,
+    /// 结束日期 yyyy-MM-dd
+    pub end_date: Option<String>,
+    /// 周几（0=周日, 1-6=周一至周六）
+    pub weekdays: Vec<u8>,
+    /// 每月几号（1-31）
+    pub month_days: Vec<u8>,
+    pub created_at: String,
+}
+
+impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for RepeatSeries {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        let weekdays: String = row.try_get("weekdays")?;
+        let month_days: String = row.try_get("month_days")?;
+        Ok(RepeatSeries {
+            id: row.try_get("id")?,
+            goal_id: row.try_get("goal_id")?,
+            base_name: row.try_get("base_name")?,
+            plan_qty: row.try_get("plan_qty")?,
+            unit: row.try_get("unit")?,
+            frequency: row.try_get("frequency")?,
+            start_date: row.try_get("start_date")?,
+            end_date: row.try_get("end_date")?,
+            weekdays: serde_json::from_str(&weekdays).unwrap_or_default(),
+            month_days: serde_json::from_str(&month_days).unwrap_or_default(),
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
+/// 更新重复任务系列输入（编辑原任务；缺省字段回退系列现值）
+#[derive(Debug, Clone, Deserialize, Validate)]
+pub struct UpdateRepeatSeriesInput {
+    pub series_id: String,
+    #[validate(custom(function = "validate_name"))]
+    pub base_name: String,
+    #[serde(default)]
+    #[validate(custom(function = "validate_qty"))]
+    pub plan_qty: Option<f64>,
+    pub unit: Option<String>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_frequency"))]
+    pub frequency: Option<String>,
+    #[validate(custom(function = "validate_date_format"))]
+    pub start_date: String,
+    #[validate(custom(function = "validate_date_format"))]
+    pub end_date: Option<String>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_weekdays"))]
+    pub weekdays: Option<Vec<u8>>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_month_days"))]
+    pub month_days: Option<Vec<u8>>,
+}
+
+/// 更新重复任务系列结果（供前端刷新进度）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepeatSeriesUpdateResult {
+    pub series: RepeatSeries,
+    pub goal_id: String,
+}
+
 /// 智能拆解输入（整合视频拆解与时间预算拆解的统一入口）
 ///
 /// 三种策略：
@@ -284,6 +360,8 @@ pub struct Task {
     pub created_at: String,
     /// P1-3：预估时长（小时），按时间预算拆解时自动填充
     pub estimated_hours: Option<f64>,
+    /// 所属重复任务系列 id（由"添加任务-重复任务"生成时写入；普通任务为 NULL）
+    pub repeat_series_id: Option<String>,
 }
 
 /// 创建任务的输入参数

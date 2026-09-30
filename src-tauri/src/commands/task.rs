@@ -43,6 +43,7 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
         sort_order: 0,
         created_at: now.clone(),
         estimated_hours: None,
+        repeat_series_id: None,
     };
     helpers::insert_task_row(&state.0, &new_task).await?;
 

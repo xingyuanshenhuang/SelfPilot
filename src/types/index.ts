@@ -105,6 +105,48 @@ export interface Task {
   created_at: string;
   /** P1-3：预估时长（小时），按时间预算拆解时自动填充 */
   estimated_hours: number | null;
+  /** 所属重复任务系列 id（"添加任务-重复任务"生成的实例；普通任务为 null） */
+  repeat_series_id: string | null;
+}
+
+/** 重复任务系列（原任务）：保存"添加任务-重复任务"的原任务设置 */
+export interface RepeatSeries {
+  id: string;
+  goal_id: string;
+  /** 基础名称（不含" - 第N次"后缀） */
+  base_name: string;
+  plan_qty: number;
+  unit: string;
+  /** 频率：daily | weekly | monthly */
+  frequency: "daily" | "weekly" | "monthly";
+  /** 起始日期 yyyy-MM-dd */
+  start_date: string;
+  /** 结束日期 yyyy-MM-dd */
+  end_date: string | null;
+  /** 周几（0=周日, 1-6=周一至周六） */
+  weekdays: number[];
+  /** 每月几号（1-31） */
+  month_days: number[];
+  created_at: string;
+}
+
+/** 更新重复任务系列输入（编辑原任务） */
+export interface UpdateRepeatSeriesInput {
+  series_id: string;
+  base_name: string;
+  plan_qty?: number;
+  unit?: string;
+  frequency?: string;
+  start_date?: string;
+  end_date?: string | null;
+  weekdays?: number[];
+  month_days?: number[];
+}
+
+/** 更新重复任务系列结果 */
+export interface RepeatSeriesUpdateResult {
+  series: RepeatSeries;
+  goal_id: string;
 }
 
 export interface CreateTaskInput {

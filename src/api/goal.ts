@@ -7,6 +7,9 @@ import type {
   ReplanPreview,
   ReplanResult,
   RepeatSplitInput,
+  RepeatSeries,
+  UpdateRepeatSeriesInput,
+  RepeatSeriesUpdateResult,
   GoalTreeNode,
   MoveGoalInput,
   SmartSplitInput,
@@ -68,6 +71,20 @@ export async function smartSplit(input: SmartSplitInput): Promise<Task[]> {
 /** 重复拆解（纯文字类任务：每天重复 or 单次） */
 export async function repeatSplit(input: RepeatSplitInput): Promise<Task[]> {
   return invokeCommand("repeat_split", { input });
+}
+
+/** 获取重复任务系列（编辑原任务时预填表单） */
+export async function getRepeatSeries(
+  seriesId: string,
+): Promise<RepeatSeries | null> {
+  return invokeCommand("get_repeat_series", { seriesId });
+}
+
+/** 更新重复任务系列（编辑原任务并级联更新所有实例） */
+export async function updateRepeatSeries(
+  input: UpdateRepeatSeriesInput,
+): Promise<RepeatSeriesUpdateResult> {
+  return invokeCommand("update_repeat_series", { input });
 }
 
 /** 重新规划预览 */

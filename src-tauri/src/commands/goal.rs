@@ -4,7 +4,8 @@ use crate::util::{new_uuid, now_local_ts};
 
 use crate::db::models::{
     CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
-    RepeatSplitInput, SmartSplitInput, Task, UpdateGoalInput,
+    RepeatSeries, RepeatSeriesUpdateResult, RepeatSplitInput, SmartSplitInput, Task, UpdateGoalInput,
+    UpdateRepeatSeriesInput,
 };
 use crate::db::DbPool;
 use crate::db::helpers;
@@ -408,6 +409,9 @@ pub async fn split_by_capacity(goal_id: String, state: State<'_, DbPool>) -> App
 ///
 /// - end_date=None 或等于 start_date → 单次任务
 /// - end_date > start_date → 每天生成一个重复任务
+///
+/// 非单次（用户选择了重复范围）时同时写入 repeat_series 系列行，
+/// 供任意实例"编辑原任务"级联更新使用。
 #[tauri::command]
 pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> AppResult<Vec<Task>> {
     // S-05 (SEC-M-05)：入参校验（名称/日期/数量/频率/周几/每月几号）
@@ -422,13 +426,56 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .ok_or_else(|| helpers::not_found("目标", &input.goal_id))?;
 
     let today = chrono::Local::now().date_naive();
-    let tasks = split_service::split_repeat_tasks(&goal, &input, today)?;
+    let mut tasks = split_service::split_repeat_tasks(&goal, &input, today)?;
+
+    // 用户选择了重复范围（end > start）时创建系列行并关联实例
+    let is_repeat_range = input
+        .end_date
+        .as_ref()
+        .map_or(false, |e| e != &input.start_date);
+
+    if is_repeat_range {
+        let series_id = new_uuid();
+        let now = now_local_ts();
+        let weekdays =
+            serde_json::to_string(&input.weekdays.clone().unwrap_or_default()).unwrap_or_default();
+        let month_days =
+            serde_json::to_string(&input.month_days.clone().unwrap_or_default()).unwrap_or_default();
+        let frequency = input
+            .frequency
+            .clone()
+            .unwrap_or_else(|| "daily".to_string())
+            .to_lowercase();
+
+        sqlx::query(
+            "INSERT INTO repeat_series (id, goal_id, base_name, plan_qty, unit, frequency, \
+             start_date, end_date, weekdays, month_days, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&series_id)
+        .bind(&goal.id)
+        .bind(&input.name)
+        .bind(input.plan_qty.unwrap_or(1.0))
+        .bind(input.unit.clone().unwrap_or_default())
+        .bind(&frequency)
+        .bind(&input.start_date)
+        .bind(input.end_date.as_ref())
+        .bind(&weekdays)
+        .bind(&month_days)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        for task in &mut tasks {
+            task.repeat_series_id = Some(series_id.clone());
+        }
+    }
 
     for task in &tasks {
         sqlx::query(
             "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
-             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id)
         .bind(&task.goal_id)
@@ -446,12 +493,244 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(task.sort_order)
         .bind(&task.created_at)
         .bind(task.estimated_hours)
+        .bind(&task.repeat_series_id)
         .execute(&mut *tx)
         .await?;
     }
 
     tx.commit().await?;
     Ok(tasks)
+}
+
+/// 获取重复任务系列（编辑原任务时预填表单）
+///
+/// 系列不存在（普通任务/悬空引用）时返回 None，前端据此隐藏入口。
+#[tauri::command]
+pub async fn get_repeat_series(
+    series_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<Option<RepeatSeries>> {
+    let series: Option<RepeatSeries> =
+        sqlx::query_as("SELECT * FROM repeat_series WHERE id = ?")
+            .bind(&series_id)
+            .fetch_optional(&state.0)
+            .await?;
+    Ok(series)
+}
+
+/// 更新重复任务系列（编辑原任务并级联更新所有实例）
+///
+/// - 名称/数量/单位：级联更新全部实例（名称重新拼" - 第N次"）
+/// - 重复规则变化（频率/日期范围/周几/每月几号）：保留已完成实例
+///   （status != 'pending' 或 actual_qty>0 或 is_manual=1），删除未完成实例，
+///   按新规则重建（跳过与保留实例相同 plan_date 的日期）。
+#[tauri::command]
+pub async fn update_repeat_series(
+    input: UpdateRepeatSeriesInput,
+    state: State<'_, DbPool>,
+) -> AppResult<RepeatSeriesUpdateResult> {
+    // S-05 (SEC-M-05)：入参校验（名称/日期/数量/频率/周几/每月几号）
+    input.validate()?;
+
+    let mut tx = state.0.begin().await?;
+
+    let series: RepeatSeries = sqlx::query_as("SELECT * FROM repeat_series WHERE id = ?")
+        .bind(&input.series_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| helpers::not_found("重复任务系列", &input.series_id))?;
+
+    // 归一化输入（缺省字段回退系列现值）
+    let plan_qty = input.plan_qty.unwrap_or(series.plan_qty);
+    let unit = input.unit.clone().unwrap_or(series.unit.clone());
+    let frequency = input
+        .frequency
+        .clone()
+        .unwrap_or_else(|| series.frequency.clone())
+        .to_lowercase();
+    let start = chrono::NaiveDate::parse_from_str(&input.start_date, "%Y-%m-%d")
+        .map_err(|e| AppError::Param(format!("起始日期格式错误: {}", e)))?;
+    let end = match &input.end_date {
+        Some(e) => {
+            let end_date = chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d")
+                .map_err(|err| AppError::Param(format!("结束日期格式错误: {}", err)))?;
+            if end_date < start {
+                return Err(AppError::Param("结束日期不能早于起始日期".into()));
+            }
+            end_date
+        }
+        None => start,
+    };
+    let weekdays = input.weekdays.clone().unwrap_or_default();
+    let month_days = input.month_days.clone().unwrap_or_default();
+
+    // 频率规则校验（单次不校验）
+    let is_single = start == end;
+    if !is_single {
+        match frequency.as_str() {
+            "weekly" => {
+                if weekdays.is_empty() {
+                    return Err(AppError::Param(
+                        "weekly 频率必须指定至少一个周几".into(),
+                    ));
+                }
+            }
+            "monthly" => {
+                if month_days.is_empty() {
+                    return Err(AppError::Param(
+                        "monthly 频率必须指定至少一个日期".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 重复规则是否发生变化
+    let schedule_changed = frequency != series.frequency
+        || input.start_date != series.start_date
+        || input.end_date != series.end_date
+        || weekdays != series.weekdays
+        || month_days != series.month_days;
+
+    // 取系列全部实例
+    let instances: Vec<Task> =
+        sqlx::query_as("SELECT * FROM tasks WHERE repeat_series_id = ? ORDER BY sort_order")
+            .bind(&input.series_id)
+            .fetch_all(&mut *tx)
+            .await?;
+
+    let multi = !is_single;
+    let now = now_local_ts();
+
+    if schedule_changed {
+        // 保留已完成/有实际量/手动改过的实例，删除其余
+        let mut kept: Vec<&Task> = Vec::new();
+        let mut to_delete: Vec<String> = Vec::new();
+        let mut kept_dates: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for t in &instances {
+            if t.status != "pending" || t.actual_qty > 0.0 || t.is_manual == 1 {
+                if let Some(d) = &t.plan_date {
+                    kept_dates.insert(d.clone());
+                }
+                kept.push(t);
+            } else {
+                to_delete.push(t.id.clone());
+            }
+        }
+
+        // 清理待删除实例的依赖关系（双向，SQLite 无外键级联）
+        for id in &to_delete {
+            sqlx::query(
+                "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?",
+            )
+            .bind(id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for id in &to_delete {
+            sqlx::query("DELETE FROM tasks WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // 级联更新保留实例的名称/数量/单位
+        for t in &kept {
+            let new_name =
+                split_service::repeat_name(&input.base_name, (t.sort_order + 1) as usize, multi);
+            sqlx::query("UPDATE tasks SET name = ?, plan_qty = ?, unit = ? WHERE id = ?")
+                .bind(&new_name)
+                .bind(plan_qty)
+                .bind(&unit)
+                .bind(&t.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // 按新规则重建未完成实例（跳过与保留实例同日的日期）
+        let dates = split_service::repeat_dates(start, end, &frequency, &weekdays, &month_days);
+        let max_sort = kept.iter().map(|t| t.sort_order).max().unwrap_or(-1);
+        let mut next_sort = max_sort + 1;
+        for d in dates {
+            let date_str = d.format("%Y-%m-%d").to_string();
+            if kept_dates.contains(&date_str) {
+                continue;
+            }
+            let task_id = new_uuid();
+            let path = format!("/{}/{}", series.goal_id, task_id);
+            let name = split_service::repeat_name(&input.base_name, (next_sort + 1) as usize, multi);
+            sqlx::query(
+                "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+                 plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&task_id)
+            .bind(&series.goal_id)
+            .bind(Option::<String>::None)
+            .bind(Some(series.goal_id.clone()))
+            .bind(&path)
+            .bind(&name)
+            .bind(Some(date_str))
+            .bind(plan_qty)
+            .bind(0.0)
+            .bind(&unit)
+            .bind("pending")
+            .bind(0)
+            .bind("auto")
+            .bind(next_sort)
+            .bind(&now)
+            .bind(Option::<f64>::None)
+            .bind(Some(series.id.clone()))
+            .execute(&mut *tx)
+            .await?;
+            next_sort += 1;
+        }
+    } else {
+        // 规则未变：仅级联更新全部实例的名称/数量/单位
+        for t in &instances {
+            let new_name =
+                split_service::repeat_name(&input.base_name, (t.sort_order + 1) as usize, multi);
+            sqlx::query("UPDATE tasks SET name = ?, plan_qty = ?, unit = ? WHERE id = ?")
+                .bind(&new_name)
+                .bind(plan_qty)
+                .bind(&unit)
+                .bind(&t.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    // 写回系列设置
+    sqlx::query(
+        "UPDATE repeat_series SET base_name = ?, plan_qty = ?, unit = ?, frequency = ?, \
+         start_date = ?, end_date = ?, weekdays = ?, month_days = ? WHERE id = ?",
+    )
+    .bind(&input.base_name)
+    .bind(plan_qty)
+    .bind(&unit)
+    .bind(&frequency)
+    .bind(&input.start_date)
+    .bind(&input.end_date)
+    .bind(serde_json::to_string(&weekdays).unwrap_or_default())
+    .bind(serde_json::to_string(&month_days).unwrap_or_default())
+    .bind(&input.series_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let updated: RepeatSeries = sqlx::query_as("SELECT * FROM repeat_series WHERE id = ?")
+        .bind(&input.series_id)
+        .fetch_one(&state.0)
+        .await?;
+
+    Ok(RepeatSeriesUpdateResult {
+        series: updated,
+        goal_id: series.goal_id,
+    })
 }
 
 /// 智能拆解（整合入口：按截止日期均分 / 按时间预算 / 自定义日期范围）

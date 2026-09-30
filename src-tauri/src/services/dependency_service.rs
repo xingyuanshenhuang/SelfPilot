@@ -240,6 +240,7 @@ mod tests {
             sort_order,
             created_at: "2026-07-07T00:00:00".to_string(),
             estimated_hours: None,
+            repeat_series_id: None,
         }
     }
 

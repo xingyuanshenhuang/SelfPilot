@@ -74,6 +74,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
             sort_order: i,
             created_at: now.clone(),
             estimated_hours: None,
+            repeat_series_id: None,
         });
     }
 
@@ -160,6 +161,7 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
             sort_order: i,
             created_at: now.clone(),
             estimated_hours: Some(capacity),
+            repeat_series_id: None,
         });
     }
 
@@ -243,6 +245,7 @@ pub fn split_by_date_range(
                     sort_order: i,
                     created_at: now.clone(),
                     estimated_hours: Some(qty),
+                    repeat_series_id: None,
                 });
             }
         }
@@ -278,6 +281,7 @@ pub fn split_by_date_range(
                     sort_order: i,
                     created_at: now.clone(),
                     estimated_hours: None,
+                    repeat_series_id: None,
                 });
             }
         }
@@ -484,6 +488,52 @@ pub fn build_replan_preview(
     })
 }
 
+/// 计算重复任务的发生日期序列（含单次：start == end 时仅一天）
+///
+/// 供 `split_repeat_tasks`（新建重复任务）与 `update_repeat_series`（编辑原任务后重建）共用。
+pub fn repeat_dates(
+    start: NaiveDate,
+    end: NaiveDate,
+    frequency: &str,
+    weekdays: &[u8],
+    month_days: &[u8],
+) -> Vec<NaiveDate> {
+    let is_single = start == end;
+    let mut dates = Vec::new();
+    let mut cursor = start;
+    while cursor <= end {
+        if is_single {
+            dates.push(cursor);
+        } else {
+            let hit = match frequency {
+                "weekly" => {
+                    let wd = cursor.weekday().num_days_from_sunday() as u8;
+                    weekdays.contains(&wd)
+                }
+                "monthly" => {
+                    let d = cursor.day() as u8;
+                    month_days.contains(&d)
+                }
+                _ => true, // daily
+            };
+            if hit {
+                dates.push(cursor);
+            }
+        }
+        cursor += chrono::Duration::days(1);
+    }
+    dates
+}
+
+/// 重复任务实例命名：重复（多发生次数）加" - 第N次"后缀，单次不加
+pub fn repeat_name(base: &str, seq: usize, multi: bool) -> String {
+    if multi {
+        format!("{} - 第{}次", base, seq)
+    } else {
+        base.to_string()
+    }
+}
+
 /// 重复拆解任务（纯文字类：按频率重复 or 单次）
 ///
 /// - end_date=None 或等于 start_date → 生成单个任务
@@ -550,68 +600,36 @@ pub fn split_repeat_tasks(
         }
     }
 
-    // 命中判定：给定 cursor 是否应生成任务
-    let should_generate = |cursor: NaiveDate| -> bool {
-        if is_single {
-            return true;
-        }
-        match frequency.as_str() {
-            "weekly" => {
-                let wd = cursor.weekday().num_days_from_sunday() as u8;
-                input
-                    .weekdays
-                    .as_ref()
-                    .map_or(false, |set| set.contains(&wd))
-            }
-            "monthly" => {
-                let d = cursor.day() as u8;
-                input
-                    .month_days
-                    .as_ref()
-                    .map_or(false, |set| set.contains(&d))
-            }
-            _ => true, // daily
-        }
-    };
+    let weekdays = input.weekdays.as_deref().unwrap_or(&[]);
+    let month_days = input.month_days.as_deref().unwrap_or(&[]);
+    let dates = repeat_dates(start, end, &frequency, weekdays, month_days);
 
     let mut tasks = Vec::new();
-    let mut seq_index = 0; // 实际生成任务的序号
-    let mut cursor = start;
+    for (seq_index, cursor) in dates.iter().enumerate() {
+        let task_id = new_uuid();
+        let path = format!("/{}/{}", goal.id, task_id);
+        let name = repeat_name(&input.name, seq_index + 1, !is_single);
 
-    while cursor <= end {
-        if should_generate(cursor) {
-            seq_index += 1;
-            let task_id = new_uuid();
-            let path = format!("/{}/{}", goal.id, task_id);
-
-            let name = if is_single {
-                input.name.clone()
-            } else {
-                format!("{} - 第{}次", input.name, seq_index)
-            };
-
-            tasks.push(Task {
-                id: task_id,
-                goal_id: goal.id.clone(),
-                stage_id: None,
-                parent_id: Some(goal.id.clone()),
-                path,
-                name,
-                plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
-                overdue_date: None,
-                plan_qty,
-                actual_qty: 0.0,
-                unit: unit.clone(),
-                status: "pending".to_string(),
-                is_manual: 0,
-                source: "auto".to_string(),
-                sort_order: (seq_index - 1) as i64,
-                created_at: now.clone(),
-                estimated_hours: None,
-            });
-        }
-
-        cursor += chrono::Duration::days(1);
+        tasks.push(Task {
+            id: task_id,
+            goal_id: goal.id.clone(),
+            stage_id: None,
+            parent_id: Some(goal.id.clone()),
+            path,
+            name,
+            plan_date: Some(cursor.format("%Y-%m-%d").to_string()),
+            overdue_date: None,
+            plan_qty,
+            actual_qty: 0.0,
+            unit: unit.clone(),
+            status: "pending".to_string(),
+            is_manual: 0,
+            source: "auto".to_string(),
+            sort_order: seq_index as i64,
+            created_at: now.clone(),
+            estimated_hours: None,
+            repeat_series_id: None,
+        });
     }
 
     Ok(tasks)
