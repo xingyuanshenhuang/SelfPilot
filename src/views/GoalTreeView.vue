@@ -46,6 +46,8 @@ import GoalTreeNodeItem, {
   goalTreeApiKey,
   type GoalTreeApi,
 } from "@/components/GoalTreeNodeItem.vue";
+import RichTextEditor from "@/components/RichTextEditor.vue";
+import { descToSend } from "@/utils/richText";
 
 const goalStore = useGoalStore();
 const taskStore = useTaskStore();
@@ -59,6 +61,8 @@ const createGoalParentId = ref<string | null>(null); // null=总目标, string=�
 const editingGoalId = ref<string>("");
 const goalForm = reactive({
   name: "",
+  /** 目标描述：详细内容、要求或达成标准 */
+  description: "",
   deadline: null as number | null,
   total_qty: 0,
   unit: "个",
@@ -101,6 +105,8 @@ const taskForm = reactive({
   task_id: "",
   goal_id: "",
   name: "",
+  /** 任务描述：详细内容或要求 */
+  description: "",
   plan_date: null as number | null,
   is_repeat: false,
   end_date: null as number | null,
@@ -158,6 +164,15 @@ const showReplanModal = ref(false);
 const replanPreview = ref<ReplanPreview | null>(null);
 const replanGoalId = ref("");
 
+// ===== 任务描述弹窗（查看 + 编辑）=====
+const showTaskDescModal = ref(false);
+const taskDescForm = reactive({
+  task_id: "",
+  goal_id: "",
+  name: "",
+  description: "",
+});
+
 onMounted(async () => {
   await goalStore.fetchGoalTree();
   await goalStore.fetchProgresses();
@@ -169,6 +184,7 @@ function openCreateGoalModal(parentId: string | null) {
   createGoalParentId.value = parentId;
   editingGoalId.value = "";
   goalForm.name = "";
+  goalForm.description = "";
   goalForm.deadline = null;
   goalForm.total_qty = 0;
   goalForm.unit = "个";
@@ -181,6 +197,7 @@ function openEditGoalModal(goal: Goal) {
   editingGoalId.value = goal.id;
   createGoalParentId.value = goal.parent_id;
   goalForm.name = goal.name;
+  goalForm.description = goal.description ?? "";
   goalForm.deadline = goal.deadline ? parseISO(goal.deadline).getTime() : null;
   goalForm.total_qty = goal.total_qty;
   goalForm.unit = goal.unit || "个";
@@ -200,6 +217,7 @@ async function handleSaveGoal() {
     if (goalModalMode.value === "create") {
       const input: CreateGoalInput = {
         name: goalForm.name,
+        description: descToSend(goalForm.description),
         parent_id: createGoalParentId.value,
         deadline,
         total_qty: goalForm.total_qty,
@@ -221,6 +239,7 @@ async function handleSaveGoal() {
       // 编辑模式：P2-3 局部更新，避免全量重拉
       const input: UpdateGoalInput = {
         id: editingGoalId.value,
+        description: descToSend(goalForm.description),
         name: goalForm.name,
         deadline,
         total_qty: goalForm.total_qty,
@@ -670,6 +689,7 @@ function openCreateTaskModal(goalId: string) {
   taskForm.task_id = "";
   taskForm.goal_id = goalId;
   taskForm.name = "";
+  taskForm.description = "";
   taskForm.plan_date = Date.now();
   taskForm.is_repeat = false;
   taskForm.end_date = null;
@@ -748,6 +768,7 @@ async function handleSaveTask() {
         const input: CreateTaskInput = {
           goal_id: taskForm.goal_id,
           name: taskForm.name,
+          description: descToSend(taskForm.description),
           plan_date,
           plan_qty: taskForm.plan_qty,
           unit: taskForm.unit,
@@ -817,6 +838,7 @@ async function handleSaveTask() {
         : null;
       const input: UpdateTaskInput = {
         task_id: taskForm.task_id,
+        description: descToSend(taskForm.description),
         name: taskForm.name,
         plan_date: plan_date ?? "",
         plan_qty: taskForm.plan_qty,
@@ -876,6 +898,7 @@ async function openEditTaskModal(task: Task) {
   taskForm.task_id = task.id;
   taskForm.goal_id = task.goal_id;
   taskForm.name = task.name;
+  taskForm.description = task.description ?? "";
   taskForm.plan_date = task.plan_date
     ? parseISO(task.plan_date).getTime()
     : null;
@@ -924,6 +947,29 @@ async function openEditRepeatModal(task: Task) {
     taskForm.dependency_ids = [];
     originalDependencyIds.value = [];
     showTaskModal.value = true;
+  } catch (e) {
+    message.error(String(e));
+  }
+}
+
+// ===== 任务描述弹窗 =====
+function openTaskDescriptionModal(task: Task) {
+  taskDescForm.task_id = task.id;
+  taskDescForm.goal_id = task.goal_id;
+  taskDescForm.name = task.name;
+  taskDescForm.description = task.description ?? "";
+  showTaskDescModal.value = true;
+}
+
+async function handleSaveTaskDescription() {
+  try {
+    const updated = await taskApi.updateTask({
+      task_id: taskDescForm.task_id,
+      description: descToSend(taskDescForm.description),
+    });
+    message.success("任务描述已保存");
+    showTaskDescModal.value = false;
+    goalStore.updateTaskLocally(updated);
   } catch (e) {
     message.error(String(e));
   }
@@ -1271,6 +1317,7 @@ const treeApi: GoalTreeApi = {
   handleDeleteGoal,
   buildTaskActions,
   handleTaskAction,
+  openTaskDescriptionModal,
   handleMoveTask,
   handleMoveGoal,
   draggingTaskId,
@@ -1345,6 +1392,12 @@ provide(goalTreeApiKey, treeApi);
           <NInput
             v-model:value="goalForm.name"
             placeholder="如：Vue 框架学习"
+          />
+        </NFormItem>
+        <NFormItem label="目标描述（可选）">
+          <RichTextEditor
+            v-model="goalForm.description"
+            placeholder="补充目标详细内容、要求或达成标准…"
           />
         </NFormItem>
         <NFormItem label="截止日期">
@@ -1706,6 +1759,20 @@ provide(goalTreeApiKey, treeApi);
             placeholder="如：完成 Vue 练习题"
           />
         </NFormItem>
+        <!-- 任务描述（重复任务创建时由原任务统一管理，不单独设置） -->
+        <NFormItem
+          v-if="
+            taskModalMode === 'edit' ||
+            (taskModalMode === 'create' && !taskForm.is_repeat)
+          "
+          label="任务描述（可选）"
+          :show-feedback="false"
+        >
+          <RichTextEditor
+            v-model="taskForm.description"
+            placeholder="补充任务详细内容或要求…"
+          />
+        </NFormItem>
         <!-- 重复开关（仅创建模式显示） -->
         <div v-if="taskModalMode === 'create'" class="flex items-center gap-2">
           <NCheckbox v-model:checked="taskForm.is_repeat"> 重复任务 </NCheckbox>
@@ -1870,6 +1937,34 @@ provide(goalTreeApiKey, treeApi);
           <NButton @click="showBackfillModal = false">取消</NButton>
           <NButton type="primary" @click="handleConfirmBackfill"
             >确认补完成</NButton
+          >
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 任务描述弹窗（查看 + 编辑） -->
+    <NModal
+      v-model:show="showTaskDescModal"
+      preset="card"
+      title="任务描述"
+      style="width: 480px"
+    >
+      <div class="space-y-3">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
+          任务：<strong>{{ taskDescForm.name }}</strong>
+        </div>
+        <NFormItem label="描述" :show-feedback="false">
+          <RichTextEditor
+            v-model="taskDescForm.description"
+            placeholder="补充任务详细内容或要求…"
+          />
+        </NFormItem>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showTaskDescModal = false">取消</NButton>
+          <NButton type="primary" @click="handleSaveTaskDescription"
+            >保存</NButton
           >
         </NSpace>
       </template>

@@ -59,6 +59,7 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
         tasks.push(Task {
             id: task_id,
             goal_id: goal.id.clone(),
+            description: None,
             stage_id: None,
             parent_id: Some(goal.id.clone()),
             path,
@@ -146,6 +147,7 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
         tasks.push(Task {
             id: task_id,
             goal_id: goal.id.clone(),
+            description: None,
             stage_id: None,
             parent_id: Some(goal.id.clone()),
             path,
@@ -230,6 +232,7 @@ pub fn split_by_date_range(
                 tasks.push(Task {
                     id: task_id,
                     goal_id: goal.id.clone(),
+                    description: None,
                     stage_id: None,
                     parent_id: Some(goal.id.clone()),
                     path,
@@ -266,6 +269,7 @@ pub fn split_by_date_range(
                 tasks.push(Task {
                     id: task_id,
                     goal_id: goal.id.clone(),
+                    description: None,
                     stage_id: None,
                     parent_id: Some(goal.id.clone()),
                     path,
@@ -613,6 +617,7 @@ pub fn split_repeat_tasks(
         tasks.push(Task {
             id: task_id,
             goal_id: goal.id.clone(),
+            description: None,
             stage_id: None,
             parent_id: Some(goal.id.clone()),
             path,
@@ -643,6 +648,7 @@ mod tests {
         Goal {
             id: id.to_string(),
             name: name.to_string(),
+            description: None,
             parent_id: None,
             path: format!("/{}", id),
             deadline: Some(deadline.to_string()),

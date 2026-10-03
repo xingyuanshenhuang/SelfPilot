@@ -20,6 +20,8 @@ export interface GoalTreeApi {
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
   handleTaskAction: (key: string, task: Task) => void;
+  /** 打开任务描述弹窗（查看 + 编辑 description） */
+  openTaskDescriptionModal: (task: Task) => void;
 
   /** 拖拽任务：移动到指定目标，beforeTaskId 指定插入位置 */
   handleMoveTask: (
@@ -65,7 +67,7 @@ export const GOAL_DRAG_MIME = "application/x-selfpilot-goal-id";
 </script>
 
 <script setup lang="ts">
-import { computed, inject } from "vue";
+import { computed, inject, ref } from "vue";
 import {
   NCard,
   NButton,
@@ -76,6 +78,7 @@ import {
 } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import type { GoalTreeNode } from "@/types";
+import { stripHtml } from "@/utils/richText";
 
 const props = withDefaults(
   defineProps<{
@@ -103,6 +106,18 @@ const goalIcon = computed(() =>
 );
 const isOverdue = computed(() =>
   !props.node.is_completed && getDaysLeft(props.node.goal.deadline).includes("逾期"),
+);
+
+// ===== 目标描述展示 =====
+/** HTML 原文（用于 v-html 渲染，已由后端净化） */
+const goalDescHtml = computed(() => props.node.goal.description ?? "");
+/** 纯文本摘要（用于判空与是否折叠） */
+const goalDescText = computed(() => stripHtml(goalDescHtml.value).trim());
+/** 展开区描述是否折叠：默认折叠（3 行截断） */
+const descExpanded = ref(false);
+/** 描述较长（含换行或超过 50 字）时显示"展开/收起"按钮 */
+const descLong = computed(
+  () => goalDescText.value.length > 50 || goalDescText.value.includes("\n"),
 );
 
 function toggle() {
@@ -370,6 +385,19 @@ const isDraggingThisGoal = computed(
           >
             {{ node.goal.name }}
           </div>
+          <!-- 目标描述：1 行截断，hover 显示全文（HTML 已由后端净化） -->
+          <NTooltip v-if="goalDescText" placement="top-start">
+            <template #trigger>
+              <div
+                class="goal-desc-inline truncate text-xs text-gray-500 dark:text-gray-400 mt-0.5"
+                v-html="goalDescHtml"
+              ></div>
+            </template>
+            <span
+              class="whitespace-pre-line break-words block"
+              v-html="goalDescHtml"
+            ></span>
+          </NTooltip>
           <div
             class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-3 mt-0.5 flex-wrap"
           >
@@ -486,6 +514,38 @@ const isDraggingThisGoal = computed(
 
       <!-- 展开内容：递归子目标 + 直属任务 -->
       <div v-if="isExpanded" class="mt-2 space-y-2">
+        <!-- 目标说明（完整展示，长文折叠为 3 行） -->
+        <div
+          v-if="goalDescText"
+          class="bg-gray-50 dark:bg-surface-muted rounded px-3 py-2"
+        >
+          <div
+            class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 mb-1"
+          >
+            <Icon
+              icon="mdi:file-document-outline"
+              width="14"
+              class="flex-shrink-0"
+            />
+            目标说明
+          </div>
+          <div
+            class="goal-desc-body text-sm text-gray-700 dark:text-gray-300 whitespace-pre-line break-words"
+            :class="descExpanded ? '' : 'desc-clamp-3'"
+            v-html="goalDescHtml"
+          ></div>
+          <NButton
+            v-if="descLong"
+            text
+            size="tiny"
+            type="info"
+            class="mt-1"
+            @click="descExpanded = !descExpanded"
+          >
+            {{ descExpanded ? "收起" : "展开" }}
+          </NButton>
+        </div>
+
         <!-- 递归子目标（支持任意层级嵌套） -->
         <GoalTreeNodeItem
           v-for="child in node.sub_goals"
@@ -521,6 +581,31 @@ const isDraggingThisGoal = computed(
 </template>
 
 <style scoped>
+/* 富文本描述：头部 1 行截断容器内将块级段落/列表项内联化，保证 truncate 生效 */
+.goal-desc-inline :deep(p),
+.goal-desc-inline :deep(li) {
+  display: inline;
+  margin: 0;
+}
+
+/* 富文本描述：展开区块级元素去默认边距，保持紧凑 */
+.goal-desc-body :deep(p) {
+  margin: 0;
+}
+.goal-desc-body :deep(ul),
+.goal-desc-body :deep(ol) {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+/* 目标说明：默认 3 行截断（配合"展开/收起"按钮） */
+.desc-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* 被拖拽的目标：半透明 */
 .dragging-opacity {
   opacity: 0.4;

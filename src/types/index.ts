@@ -3,6 +3,8 @@
 export interface Goal {
   id: string;
   name: string;
+  /** 目标描述：详细内容、要求或达成标准（null=未设置） */
+  description: string | null;
   /** 父目标 ID（null=总目标，否则=子目标） */
   parent_id: string | null;
   path: string;
@@ -17,6 +19,8 @@ export interface Goal {
 
 export interface CreateGoalInput {
   name: string;
+  /** 目标描述：详细内容、要求或达成标准 */
+  description?: string | null;
   /** 父目标 ID（不传=总目标） */
   parent_id?: string | null;
   deadline?: string | null;
@@ -28,6 +32,8 @@ export interface CreateGoalInput {
 
 export interface UpdateGoalInput {
   id: string;
+  /** 目标描述：不传=不修改，传空串=清除 */
+  description?: string | null;
   name?: string;
   deadline?: string | null;
   total_qty?: number;
@@ -88,6 +94,8 @@ export interface GoalTreeNode {
 export interface Task {
   id: string;
   goal_id: string;
+  /** 任务描述：详细内容或要求（null=未设置） */
+  description: string | null;
   stage_id: string | null;
   parent_id: string | null;
   path: string;
@@ -151,6 +159,8 @@ export interface RepeatSeriesUpdateResult {
 
 export interface CreateTaskInput {
   goal_id: string;
+  /** 任务描述：详细内容或要求 */
+  description?: string | null;
   stage_id?: string | null;
   name: string;
   plan_date?: string | null;
@@ -166,6 +176,8 @@ export interface CompleteTaskInput {
 /** 更新任务输入（通用：名称、计划日期、计划数量，均可选） */
 export interface UpdateTaskInput {
   task_id: string;
+  /** 任务描述：不传=不修改，传空串=清除 */
+  description?: string | null;
   name?: string;
   plan_date?: string;
   plan_qty?: number;

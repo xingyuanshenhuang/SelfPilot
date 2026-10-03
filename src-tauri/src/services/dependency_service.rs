@@ -225,6 +225,7 @@ mod tests {
         Task {
             id: id.to_string(),
             goal_id: "g1".to_string(),
+            description: None,
             stage_id: None,
             parent_id: None,
             path: format!("/g1/{}", id),

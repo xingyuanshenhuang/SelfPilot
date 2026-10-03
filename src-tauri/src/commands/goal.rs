@@ -10,6 +10,7 @@ use crate::db::models::{
 use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
+use crate::sanitize::normalize_description;
 use crate::services::{dependency_service, progress_service, split_service};
 use validator::Validate;
 
@@ -52,11 +53,12 @@ pub async fn create_goal(input: CreateGoalInput, state: State<'_, DbPool>) -> Ap
     };
 
     sqlx::query(
-        "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at, daily_capacity)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO goals (id, name, description, parent_id, path, deadline, total_qty, unit, sort_order, created_at, daily_capacity)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.name)
+    .bind(normalize_description(input.description.clone()))
     .bind(&input.parent_id)
     .bind(&path)
     .bind(&input.deadline)
@@ -181,6 +183,10 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     if input.name.is_some() {
         updates.push("name = ?".to_string());
     }
+    // 描述可更新为 NULL（清除），仅传入时写入
+    if input.description.is_some() {
+        updates.push("description = ?".to_string());
+    }
     // deadline 始终更新：支持从有截止日期切换为"无限期"（清空为 NULL）。
     // 前端编辑表单总是携带 deadline（字符串或 null），故始终写入即可。
     updates.push("deadline = ?".to_string());
@@ -202,6 +208,12 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     let mut q = sqlx::query(&sql);
     if let Some(name) = &input.name {
         q = q.bind(name);
+    }
+    // description 可为 NULL（清除）；HTML 净化后归一化（空内容 → NULL）
+    if let Some(desc) = normalize_description(input.description.clone()) {
+        q = q.bind(Some(desc));
+    } else {
+        q = q.bind::<Option<String>>(None);
     }
     // deadline 可为 NULL（无限期），直接绑定 Option
     q = q.bind(&input.deadline);

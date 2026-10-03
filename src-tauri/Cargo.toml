@@ -29,6 +29,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 # S-05 (SEC-M-05)：入参校验
 validator = { version = "0.18", features = ["derive"] }
+# 富文本描述（description）HTML 白名单净化，防止 XSS（含备份导入向量）
+ammonia = "4"
 
 # Windows 安装时自定义数据目录（注册表读取，见 portable.rs）
 [target.'cfg(windows)'.dependencies]

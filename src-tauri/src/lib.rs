@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod error;
 mod portable;
+mod sanitize;
 mod services;
 mod util;
 

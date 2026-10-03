@@ -7,6 +7,7 @@ use crate::db::models::{
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+use crate::sanitize::normalize_description;
 use crate::util::{new_uuid, now_local_ts};
 
 /// S-05 (SEC-M-06)：导入数据允许的 settings key 白名单
@@ -278,14 +279,16 @@ pub async fn import_data(
             }
             "overwrite" => {
                 sqlx::query(
-                    "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO goals (id, name, description, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
                      name=excluded.name, parent_id=excluded.parent_id, deadline=excluded.deadline,
-                     total_qty=excluded.total_qty, unit=excluded.unit, sort_order=excluded.sort_order",
+                     total_qty=excluded.total_qty, unit=excluded.unit, sort_order=excluded.sort_order,
+                     description=excluded.description",
                 )
                 .bind(&id)
                 .bind(&g.name)
+                .bind(normalize_description(g.description.clone()))
                 .bind(&g.parent_id)
                 .bind(&g.path)
                 .bind(&g.deadline)
@@ -299,11 +302,12 @@ pub async fn import_data(
         }
         _ => {
         sqlx::query(
-            "INSERT INTO goals (id, name, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO goals (id, name, description, parent_id, path, deadline, total_qty, unit, sort_order, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&g.name)
+        .bind(normalize_description(g.description.clone()))
         .bind(&g.parent_id)
         .bind(&g.path)
         .bind(&g.deadline)
@@ -352,15 +356,17 @@ pub async fn import_data(
             }
             "overwrite" => {
                 sqlx::query(
-                    "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+                    "INSERT INTO tasks (id, goal_id, description, stage_id, parent_id, path, name, plan_date,
                      plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
                      name=excluded.name, plan_date=excluded.plan_date, plan_qty=excluded.plan_qty,
-                     actual_qty=excluded.actual_qty, status=excluded.status, estimated_hours=excluded.estimated_hours",
+                     actual_qty=excluded.actual_qty, status=excluded.status, estimated_hours=excluded.estimated_hours,
+                     description=excluded.description",
                 )
                 .bind(&id)
                 .bind(&mapped_goal_id)
+                .bind(normalize_description(t.description.clone()))
                 .bind(&t.stage_id)
                 .bind(&t.parent_id)
                 .bind(&t.path)
@@ -381,12 +387,13 @@ pub async fn import_data(
         }
         _ => {
         sqlx::query(
-            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+            "INSERT INTO tasks (id, goal_id, description, stage_id, parent_id, path, name, plan_date,
              plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&mapped_goal_id)
+        .bind(normalize_description(t.description.clone()))
         .bind(&t.stage_id)
         .bind(&t.parent_id)
         .bind(&t.path)

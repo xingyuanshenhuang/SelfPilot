@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
-import { NVirtualList, NTag, NDropdown, NButton } from "naive-ui";
+import { NVirtualList, NTag, NDropdown, NButton, NTooltip } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { STATUS_META, type Task } from "@/types";
+import { stripHtml } from "@/utils/richText";
 import {
   goalTreeApiKey,
   type GoalTreeApi,
@@ -174,6 +175,31 @@ function isTaskDropAfter(task: Task): boolean {
         <span class="text-xs text-gray-500 dark:text-gray-400">
           {{ task.actual_qty }}/{{ task.plan_qty }}{{ task.unit }}
         </span>
+        <!-- 任务描述标记：有描述时显示，hover 看全文，点击查看/编辑（B+D） -->
+        <NTooltip
+          v-if="task.description && stripHtml(task.description).trim()"
+          placement="top"
+        >
+          <template #trigger>
+            <NButton
+              size="tiny"
+              quaternary
+              class="flex-shrink-0"
+              @click.stop="api.openTaskDescriptionModal(task)"
+            >
+              <Icon
+                icon="mdi:file-document-outline"
+                width="15"
+                class="text-gray-400 dark:text-gray-500"
+              />
+            </NButton>
+          </template>
+          <span
+            class="whitespace-pre-line break-words block"
+            style="max-width: 20rem"
+            v-html="task.description"
+          ></span>
+        </NTooltip>
         <NDropdown
           trigger="click"
           :options="api.buildTaskActions(task)"
@@ -231,6 +257,31 @@ function isTaskDropAfter(task: Task): boolean {
             <span class="text-xs text-gray-500 dark:text-gray-400">
               {{ item.actual_qty }}/{{ item.plan_qty }}{{ item.unit }}
             </span>
+            <!-- 任务描述标记：有描述时显示，hover 看全文，点击查看/编辑（B+D） -->
+            <NTooltip
+              v-if="item.description && stripHtml(item.description).trim()"
+              placement="top"
+            >
+              <template #trigger>
+                <NButton
+                  size="tiny"
+                  quaternary
+                  class="flex-shrink-0"
+                  @click.stop="api.openTaskDescriptionModal(item)"
+                >
+                  <Icon
+                    icon="mdi:file-document-outline"
+                    width="15"
+                    class="text-gray-400 dark:text-gray-500"
+                  />
+                </NButton>
+              </template>
+              <span
+                class="whitespace-pre-line break-words block"
+                style="max-width: 20rem"
+                v-html="item.description"
+              ></span>
+            </NTooltip>
             <NDropdown
               trigger="click"
               :options="api.buildTaskActions(item)"

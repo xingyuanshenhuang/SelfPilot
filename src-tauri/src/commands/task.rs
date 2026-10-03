@@ -8,6 +8,7 @@ use crate::db::models::{
 use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
+use crate::sanitize::normalize_description;
 use crate::services::dependency_service;
 use validator::Validate;
 
@@ -23,11 +24,12 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
     let unit = input.unit.unwrap_or_default();
     let path = format!("/{}/{}", input.goal_id, id);
 
-    // R-03：使用 helpers::insert_task_row 统一 16 列 INSERT
+    // R-03：使用 helpers::insert_task_row 统一 17 列 INSERT
     // 注：原代码 parent_id 绑定的是 input.goal_id（历史行为），此处保留以避免引入行为变化
     let new_task = Task {
         id: id.clone(),
         goal_id: input.goal_id.clone(),
+        description: normalize_description(input.description.clone()),
         stage_id: input.stage_id.clone(),
         parent_id: Some(input.goal_id.clone()),
         path: path.clone(),
@@ -457,6 +459,11 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
     let mut updates: Vec<String> = Vec::new();
     let mut mark_manual = false;
 
+    // 描述可更新为 NULL（清除），仅传入时写入
+    if input.description.is_some() {
+        updates.push("description = ?".to_string());
+    }
+
     if let Some(name) = &input.name {
         if name.trim().is_empty() {
             return Err(AppError::Param("任务名称不能为空".into()));
@@ -491,6 +498,12 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
 
     // 动态绑定参数
     let mut q = sqlx::query(&sql);
+    // description 可为 NULL（清除）；HTML 净化后归一化（空内容 → NULL）
+    if let Some(desc) = normalize_description(input.description.clone()) {
+        q = q.bind(Some(desc));
+    } else {
+        q = q.bind::<Option<String>>(None);
+    }
     if let Some(name) = &input.name {
         q = q.bind(name);
     }

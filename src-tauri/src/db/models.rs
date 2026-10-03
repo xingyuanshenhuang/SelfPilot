@@ -136,6 +136,8 @@ fn validate_conflict_mode(s: &str) -> Result<(), ValidationError> {
 pub struct Goal {
     pub id: String,
     pub name: String,
+    /// 目标描述：详细内容、要求或达成标准（None=未设置）
+    pub description: Option<String>,
     /// 父目标 ID（NULL=总目标，否则=子目标）
     pub parent_id: Option<String>,
     pub path: String,
@@ -153,6 +155,9 @@ pub struct Goal {
 pub struct CreateGoalInput {
     #[validate(custom(function = "validate_name"))]
     pub name: String,
+    /// 目标描述：详细内容、要求或达成标准（None=未设置）
+    #[validate(length(max = 20000))]
+    pub description: Option<String>,
     /// 父目标 ID（None=总目标，Some=子目标）
     pub parent_id: Option<String>,
     #[validate(custom(function = "validate_date_format"))]
@@ -170,6 +175,9 @@ pub struct CreateGoalInput {
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct UpdateGoalInput {
     pub id: String,
+    /// 目标描述：None=不修改，Some 空串=清除
+    #[validate(length(max = 20000))]
+    pub description: Option<String>,
     #[validate(custom(function = "validate_name"))]
     pub name: Option<String>,
     #[validate(custom(function = "validate_date_format"))]
@@ -343,6 +351,8 @@ pub struct GoalTreeNode {
 pub struct Task {
     pub id: String,
     pub goal_id: String,
+    /// 任务描述：详细内容或要求（None=未设置）
+    pub description: Option<String>,
     pub stage_id: Option<String>,
     pub parent_id: Option<String>,
     pub path: String,
@@ -368,6 +378,9 @@ pub struct Task {
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateTaskInput {
     pub goal_id: String,
+    /// 任务描述：详细内容或要求（None=未设置）
+    #[validate(length(max = 20000))]
+    pub description: Option<String>,
     pub stage_id: Option<String>,
     #[validate(custom(function = "validate_name"))]
     pub name: String,
@@ -394,6 +407,9 @@ pub struct CompleteTaskInput {
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct UpdateTaskInput {
     pub task_id: String,
+    /// 任务描述：None=不修改，Some 空串=清除
+    #[validate(length(max = 20000))]
+    pub description: Option<String>,
     #[validate(custom(function = "validate_name"))]
     pub name: Option<String>,
     /// 空串表示清除日期（宽松校验放行）
