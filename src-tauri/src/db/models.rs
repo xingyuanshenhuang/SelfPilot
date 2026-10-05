@@ -919,3 +919,12 @@ pub struct SetTaskDependencyInput {
     /// 前置任务 ID（task_id 依赖此任务）
     pub depends_on_id: String,
 }
+
+/// 重置数据库输入（将数据库恢复至初始默认状态）
+///
+/// 布尔字段天然合法，无需 validator 校验规则。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResetDatabaseInput {
+    /// 是否在重置前自动备份当前数据库（推荐开启）
+    pub backup: bool,
+}

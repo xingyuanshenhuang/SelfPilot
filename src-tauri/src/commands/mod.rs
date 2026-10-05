@@ -96,5 +96,6 @@ pub fn build_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send
         backup::import_data,
         backup::backup_database,
         backup::restore_database,
+        backup::reset_database,
     ]
 }

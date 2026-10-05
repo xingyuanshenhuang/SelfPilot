@@ -8,6 +8,8 @@ import {
   NRadioButton,
   NModal,
   NSelect,
+  NCheckbox,
+  NInput,
   NDescriptions,
   NDescriptionsItem,
   NTag,
@@ -20,11 +22,15 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useSettingStore } from "@/stores/settingStore";
 import { useEncouragementStore } from "@/stores/encouragementStore";
+import { useGoalStore } from "@/stores/goalStore";
+import { useTaskStore } from "@/stores/taskStore";
 import * as backupApi from "@/api/backup";
 import type { ImportConflictMode, ImportResult } from "@/types";
 
 const settingStore = useSettingStore();
 const encStore = useEncouragementStore();
+const goalStore = useGoalStore();
+const taskStore = useTaskStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -38,6 +44,12 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 // SQLite 原生备份/恢复状态
 const nativeBackingUp = ref(false);
 const nativeRestoring = ref(false);
+
+// 重置数据库状态
+const resetting = ref(false);
+const showResetModal = ref(false);
+const backupChecked = ref(true);
+const resetConfirmText = ref("");
 
 // 导入文件摘要信息
 interface ExportSummary {
@@ -281,6 +293,52 @@ async function handleNativeRestore() {
     message.error(String(e));
   }
 }
+
+/** 打开重置数据库确认弹窗 */
+function openResetModal() {
+  backupChecked.value = true;
+  resetConfirmText.value = "";
+  showResetModal.value = true;
+}
+
+function cancelResetModal() {
+  showResetModal.value = false;
+  resetConfirmText.value = "";
+}
+
+/** 确认重置数据库：清空全部业务数据并恢复默认设置 */
+async function handleResetDatabase() {
+  if (resetConfirmText.value !== "重置") return;
+  resetting.value = true;
+  try {
+    await backupApi.resetDatabase({ backup: backupChecked.value });
+    showResetModal.value = false;
+    resetConfirmText.value = "";
+
+    // 缓存清理：刷新各 store + 清除本地持久化设置，恢复默认状态
+    await Promise.all([
+      goalStore.fetchGoals(),
+      goalStore.fetchGoalTree(),
+      goalStore.fetchProgresses(),
+      taskStore.fetchAll(),
+      encStore.fetchSettings(),
+    ]);
+    localStorage.removeItem("selfpilot-settings");
+    await settingStore.loadTheme();
+    await settingStore.loadIconMode();
+
+    message.success("数据库已重置为初始默认状态");
+    dialog.success({
+      title: "重置完成",
+      content: "目标、任务等数据已清空，预设鼓励语已恢复，设置已回到默认值。",
+      positiveText: "知道了",
+    });
+  } catch (e) {
+    message.error(`重置失败: ${String(e)}`);
+  } finally {
+    resetting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -294,7 +352,9 @@ async function handleNativeRestore() {
         </div>
       </template>
       <NSpace vertical :size="12">
-        <div class="text-sm text-gray-600 dark:text-gray-300">选择应用的主题外观：</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300">
+          选择应用的主题外观：
+        </div>
         <NRadioGroup
           :value="settingStore.theme"
           @update:value="handleThemeChange"
@@ -333,7 +393,9 @@ async function handleNativeRestore() {
             本地（推荐）
           </NRadioButton>
           <NRadioButton value="online">
-            <template #icon><Icon icon="mdi:cloud-download-outline" /></template>
+            <template #icon
+              ><Icon icon="mdi:cloud-download-outline"
+            /></template>
             联网
           </NRadioButton>
         </NRadioGroup>
@@ -371,7 +433,9 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">显示鼓励语</div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">完成任务时显示鼓励文案</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              完成任务时显示鼓励文案
+            </div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.enabled"
@@ -423,7 +487,9 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">庆祝动画</div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">全部目标完成时显示庆祝效果</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              全部目标完成时显示庆祝效果
+            </div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.celebration_animation"
@@ -439,7 +505,9 @@ async function handleNativeRestore() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium">显示 emoji</div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">鼓励语文案中显示表情符号</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              鼓励语文案中显示表情符号
+            </div>
           </div>
           <NSwitch
             v-model:value="encStore.settings.emoji_enabled"
@@ -494,10 +562,43 @@ async function handleNativeRestore() {
             恢复备份
           </NButton>
         </NSpace>
-        <div class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
+        <div
+          class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1"
+        >
           <Icon icon="mdi:information-outline" width="14" />
           恢复时会自动备份当前数据，不用担心丢失
         </div>
+      </NSpace>
+    </NCard>
+
+    <!-- 重置数据库 -->
+    <NCard :bordered="false">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <Icon
+            icon="mdi:database-refresh-outline"
+            width="20"
+            class="text-red-500"
+          />
+          <span>重置数据库</span>
+          <NTag type="error" size="small" :bordered="false">危险</NTag>
+        </div>
+      </template>
+      <NSpace vertical :size="12">
+        <div class="text-sm text-gray-600 dark:text-gray-300">
+          将清空全部目标、任务、自定义鼓励语等数据，并恢复默认设置（主题、图标模式、鼓励语偏好）。该操作不可撤销，请谨慎使用。
+        </div>
+        <NButton
+          type="error"
+          ghost
+          :loading="resetting"
+          @click="openResetModal"
+        >
+          <template #icon>
+            <Icon icon="mdi:database-refresh-outline" />
+          </template>
+          重置数据库
+        </NButton>
       </NSpace>
     </NCard>
 
@@ -545,7 +646,9 @@ async function handleNativeRestore() {
           @change="handleFileChange"
         />
         <div class="text-xs text-gray-400 dark:text-gray-500 space-y-0.5">
-          <div class="flex items-center gap-1 font-medium text-gray-500 dark:text-gray-400">
+          <div
+            class="flex items-center gap-1 font-medium text-gray-500 dark:text-gray-400"
+          >
             导入时的冲突处理方式：
           </div>
           <div class="flex items-center gap-1">
@@ -579,7 +682,9 @@ async function handleNativeRestore() {
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="border-b border-gray-200 dark:border-surface-border">
-            <th class="py-2 px-3 text-left text-gray-500 dark:text-gray-400 font-medium w-24" />
+            <th
+              class="py-2 px-3 text-left text-gray-500 dark:text-gray-400 font-medium w-24"
+            />
             <th class="py-2 px-3 text-center font-medium text-purple-600">
               <Icon
                 icon="mdi:database-sync-outline"
@@ -588,7 +693,9 @@ async function handleNativeRestore() {
               />
               一键备份
             </th>
-            <th class="py-2 px-3 text-center font-medium text-brand-600 dark:text-brand-400">
+            <th
+              class="py-2 px-3 text-center font-medium text-brand-600 dark:text-brand-400"
+            >
               <Icon
                 icon="mdi:file-document-outline"
                 width="16"
@@ -631,7 +738,9 @@ async function handleNativeRestore() {
           <tr>
             <td class="py-2 px-3 text-gray-500 dark:text-gray-400">推荐度</td>
             <td class="py-2 px-3 text-center text-purple-500">⭐⭐⭐</td>
-            <td class="py-2 px-3 text-center text-gray-400 dark:text-gray-500">⭐⭐</td>
+            <td class="py-2 px-3 text-center text-gray-400 dark:text-gray-500">
+              ⭐⭐
+            </td>
           </tr>
         </tbody>
       </table>
@@ -672,17 +781,30 @@ async function handleNativeRestore() {
     >
       <NSpace vertical :size="12">
         <!-- 数据摘要 -->
-        <div v-if="importSummary" class="bg-gray-50 dark:bg-surface-muted rounded p-3 space-y-1">
-          <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">备份文件信息</div>
-          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
+        <div
+          v-if="importSummary"
+          class="bg-gray-50 dark:bg-surface-muted rounded p-3 space-y-1"
+        >
+          <div
+            class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+          >
+            备份文件信息
+          </div>
+          <div
+            class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2"
+          >
             <Icon icon="mdi:tag-outline" width="14" />
             版本：{{ importSummary.version || "未知" }}
           </div>
-          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
+          <div
+            class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2"
+          >
             <Icon icon="mdi:clock-outline" width="14" />
             导出时间：{{ formattedExportTime }}
           </div>
-          <div class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2">
+          <div
+            class="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-2"
+          >
             <Icon icon="mdi:bullseye" width="14" />
             {{ importSummary.goals_count ?? 0 }} 个目标，
             {{ importSummary.tasks_count ?? 0 }} 个任务，
@@ -703,6 +825,62 @@ async function handleNativeRestore() {
           <NButton @click="cancelImport">取消</NButton>
           <NButton type="primary" :loading="importing" @click="confirmImport">
             确认导入
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 重置数据库确认弹窗 -->
+    <NModal
+      v-model:show="showResetModal"
+      preset="card"
+      title="确认重置数据库"
+      style="width: 480px"
+    >
+      <NSpace vertical :size="12">
+        <div class="bg-red-50 dark:bg-red-500/10 rounded p-3 space-y-1">
+          <div
+            class="text-sm font-medium text-red-600 dark:text-red-400 mb-1 flex items-center gap-1"
+          >
+            <Icon icon="mdi:alert-outline" width="16" />
+            危险操作：以下数据将被永久清空
+          </div>
+          <div class="text-xs text-red-600/80 dark:text-red-400/80 space-y-0.5">
+            <div>· 全部目标、阶段、任务及依赖关系</div>
+            <div>· 重复任务系列</div>
+            <div>· 自定义鼓励语、收藏、展示记录</div>
+            <div>· 应用设置（主题、图标模式、鼓励语偏好）</div>
+          </div>
+        </div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">
+          重置后数据库将恢复为初始默认状态（预设鼓励语保留）。此操作不可撤销。
+        </div>
+        <NCheckbox v-model:checked="backupChecked">
+          重置前自动备份当前数据（推荐）
+        </NCheckbox>
+        <div>
+          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
+            请输入「重置」以确认操作：
+          </div>
+          <NInput
+            v-model:value="resetConfirmText"
+            placeholder="输入「重置」"
+            :disabled="resetting"
+          />
+        </div>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton :disabled="resetting" @click="cancelResetModal">
+            取消
+          </NButton>
+          <NButton
+            type="error"
+            :loading="resetting"
+            :disabled="resetConfirmText !== '重置'"
+            @click="handleResetDatabase"
+          >
+            确认重置
           </NButton>
         </NSpace>
       </template>

@@ -47,3 +47,8 @@ export async function restoreDatabase(sourcePath: string): Promise<void> {
   validatePath(sourcePath, "恢复源路径");
   return invokeCommand("restore_database", { sourcePath });
 }
+
+/** 重置数据库（一键恢复至初始默认状态，可选重置前自动备份） */
+export async function resetDatabase(input: { backup: boolean }): Promise<void> {
+  return invokeCommand("reset_database", { input });
+}

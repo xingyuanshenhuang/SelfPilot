@@ -3,7 +3,7 @@ use tauri::{AppHandle, State};
 use validator::Validate;
 
 use crate::db::models::{
-    Encouragement, ExportData, Goal, ImportInput, ImportResult, Setting, Task,
+    Encouragement, ExportData, Goal, ImportInput, ImportResult, ResetDatabaseInput, Setting, Task,
 };
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
@@ -600,6 +600,85 @@ pub async fn restore_database(
     // 覆盖 db 文件
     std::fs::copy(&source_path, &db_path)
         .map_err(|e| AppError::Internal(format!("覆盖数据库文件失败: {}", e)))?;
+
+    Ok(())
+}
+
+/// 重置数据库：单事务内清空业务数据，恢复预设鼓励语与默认设置
+///
+/// 步骤：
+/// 1. （可选）重置前自动备份当前 db → selfpilot.db.before_restore（复用恢复安全网模式）
+/// 2. 单事务按外键顺序 DELETE 用户数据；任一步失败自动回滚（原子性）
+/// 3. 恢复预设鼓励语默认状态（保留 category='preset'，清 hidden=0，删除 category='custom'）
+/// 4. 删除 settings（前端读取侧自带默认值回退 → 主题/图标/鼓励语偏好回默认）
+/// 5. 重置 sqlite_sequence（若存在该表）
+/// 6. tracing 记录操作日志（本地单用户应用：操作人员即当前用户，含时间与结果）
+#[tauri::command]
+pub async fn reset_database(
+    input: ResetDatabaseInput,
+    app: AppHandle,
+    state: State<'_, DbPool>,
+) -> AppResult<()> {
+    // 1.（可选）重置前自动备份当前 db（安全网，与恢复操作同一文件）
+    let app_dir = crate::portable::resolve_app_dir(&app)?;
+    let db_path = app_dir.join("selfpilot.db");
+    if input.backup {
+        let backup_path = app_dir.join("selfpilot.db.before_restore");
+        if db_path.exists() {
+            std::fs::copy(&db_path, &backup_path).map_err(|e| {
+                AppError::Internal(format!("重置前备份当前数据库失败: {}", e))
+            })?;
+        }
+    }
+
+    // 2. 单事务清空用户数据（严格按外键依赖顺序）
+    let mut tx = state.0.begin().await?;
+    sqlx::query("DELETE FROM task_dependencies")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM tasks").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM stages").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM repeat_series").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM goals").execute(&mut *tx).await?;
+
+    // 3. 恢复预设鼓励语默认状态：清自定义、清收藏/展示日志、预设取消隐藏
+    sqlx::query("DELETE FROM encouragement_favorites")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM encouragement_show_log")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM encouragements WHERE category = 'custom'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE encouragements SET hidden = 0 WHERE category = 'preset'")
+        .execute(&mut *tx)
+        .await?;
+
+    // 4. 删除全部设置（读取侧默认值回退 → 恢复默认设置）
+    sqlx::query("DELETE FROM settings").execute(&mut *tx).await?;
+
+    // 5. 重置自增序列（sqlite_sequence 仅在存在 AUTOINCREMENT 时创建，需先确认）
+    let seq_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if seq_exists > 0 {
+        sqlx::query("DELETE FROM sqlite_sequence")
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    // 6. 操作日志（tracing 已带时间戳；本地单用户应用操作人员即当前用户）
+    tracing::info!(
+        operator = "local_user",
+        backup = input.backup,
+        result = "success",
+        "数据库已重置为初始默认状态"
+    );
 
     Ok(())
 }
