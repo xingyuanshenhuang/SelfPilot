@@ -617,7 +617,7 @@ pub fn split_repeat_tasks(
         tasks.push(Task {
             id: task_id,
             goal_id: goal.id.clone(),
-            description: None,
+            description: input.description.clone().filter(|d| !d.trim().is_empty()),
             stage_id: None,
             parent_id: Some(goal.id.clone()),
             path,

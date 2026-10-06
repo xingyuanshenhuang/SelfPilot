@@ -429,6 +429,10 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
     // S-05 (SEC-M-05)：入参校验（名称/日期/数量/频率/周几/每月几号）
     input.validate()?;
 
+    // 描述净化（空内容归 None、截断、白名单过滤），应用于所有生成的实例
+    let mut input = input;
+    input.description = normalize_description(input.description);
+
     let mut tx = state.0.begin().await?;
 
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
@@ -460,13 +464,14 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
             .to_lowercase();
 
         sqlx::query(
-            "INSERT INTO repeat_series (id, goal_id, base_name, plan_qty, unit, frequency, \
+            "INSERT INTO repeat_series (id, goal_id, base_name, description, plan_qty, unit, frequency, \
              start_date, end_date, weekdays, month_days, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&series_id)
         .bind(&goal.id)
         .bind(&input.name)
+        .bind(&input.description)
         .bind(input.plan_qty.unwrap_or(1.0))
         .bind(input.unit.clone().unwrap_or_default())
         .bind(&frequency)
@@ -485,9 +490,9 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
 
     for task in &tasks {
         sqlx::query(
-            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+            "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date, description,
              plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id)
         .bind(&task.goal_id)
@@ -496,6 +501,7 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(&task.path)
         .bind(&task.name)
         .bind(&task.plan_date)
+        .bind(&task.description)
         .bind(task.plan_qty)
         .bind(task.actual_qty)
         .bind(&task.unit)
@@ -575,6 +581,14 @@ pub async fn update_repeat_series(
     };
     let weekdays = input.weekdays.clone().unwrap_or_default();
     let month_days = input.month_days.clone().unwrap_or_default();
+
+    // 描述：未提供=保持现值；提供=净化后应用（空内容归 None）
+    let description = match input.description.clone() {
+        Some(raw) => normalize_description(Some(raw)),
+        None => series.description.clone(),
+    };
+    // 描述是否变化：未变化时不级联覆盖，保留实例上被单独编辑过的描述
+    let desc_changed = description != series.description;
 
     // 频率规则校验（单次不校验）
     let is_single = start == end;
@@ -662,6 +676,15 @@ pub async fn update_repeat_series(
                 .await?;
         }
 
+        // 描述变化时级联更新保留实例（重建实例的描述由下方 INSERT 写入）
+        if desc_changed {
+            sqlx::query("UPDATE tasks SET description = ? WHERE repeat_series_id = ?")
+                .bind(&description)
+                .bind(&input.series_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
         // 按新规则重建未完成实例（跳过与保留实例同日的日期）
         let dates = split_service::repeat_dates(start, end, &frequency, &weekdays, &month_days);
         let max_sort = kept.iter().map(|t| t.sort_order).max().unwrap_or(-1);
@@ -675,9 +698,9 @@ pub async fn update_repeat_series(
             let path = format!("/{}/{}", series.goal_id, task_id);
             let name = split_service::repeat_name(&input.base_name, (next_sort + 1) as usize, multi);
             sqlx::query(
-                "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date,
+                "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date, description,
                  plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&task_id)
             .bind(&series.goal_id)
@@ -686,6 +709,7 @@ pub async fn update_repeat_series(
             .bind(&path)
             .bind(&name)
             .bind(Some(date_str))
+            .bind(&description)
             .bind(plan_qty)
             .bind(0.0)
             .bind(&unit)
@@ -713,14 +737,24 @@ pub async fn update_repeat_series(
                 .execute(&mut *tx)
                 .await?;
         }
+
+        // 描述变化时级联更新全部实例
+        if desc_changed {
+            sqlx::query("UPDATE tasks SET description = ? WHERE repeat_series_id = ?")
+                .bind(&description)
+                .bind(&input.series_id)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
 
     // 写回系列设置
     sqlx::query(
-        "UPDATE repeat_series SET base_name = ?, plan_qty = ?, unit = ?, frequency = ?, \
+        "UPDATE repeat_series SET base_name = ?, description = ?, plan_qty = ?, unit = ?, frequency = ?, \
          start_date = ?, end_date = ?, weekdays = ?, month_days = ? WHERE id = ?",
     )
     .bind(&input.base_name)
+    .bind(&description)
     .bind(plan_qty)
     .bind(&unit)
     .bind(&frequency)

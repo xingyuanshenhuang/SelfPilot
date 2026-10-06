@@ -47,7 +47,6 @@ import GoalTreeNodeItem, {
   type GoalTreeApi,
 } from "@/components/GoalTreeNodeItem.vue";
 import RichTextEditor from "@/components/RichTextEditor.vue";
-import { descToSend } from "@/utils/richText";
 
 const goalStore = useGoalStore();
 const taskStore = useTaskStore();
@@ -217,7 +216,7 @@ async function handleSaveGoal() {
     if (goalModalMode.value === "create") {
       const input: CreateGoalInput = {
         name: goalForm.name,
-        description: descToSend(goalForm.description),
+        description: goalForm.description,
         parent_id: createGoalParentId.value,
         deadline,
         total_qty: goalForm.total_qty,
@@ -239,7 +238,7 @@ async function handleSaveGoal() {
       // 编辑模式：P2-3 局部更新，避免全量重拉
       const input: UpdateGoalInput = {
         id: editingGoalId.value,
-        description: descToSend(goalForm.description),
+        description: goalForm.description,
         name: goalForm.name,
         deadline,
         total_qty: goalForm.total_qty,
@@ -747,6 +746,7 @@ async function handleSaveTask() {
         const input: RepeatSplitInput = {
           goal_id: taskForm.goal_id,
           name: taskForm.name,
+          description: taskForm.description,
           start_date,
           end_date,
           plan_qty: taskForm.plan_qty,
@@ -768,7 +768,7 @@ async function handleSaveTask() {
         const input: CreateTaskInput = {
           goal_id: taskForm.goal_id,
           name: taskForm.name,
-          description: descToSend(taskForm.description),
+          description: taskForm.description,
           plan_date,
           plan_qty: taskForm.plan_qty,
           unit: taskForm.unit,
@@ -816,6 +816,8 @@ async function handleSaveTask() {
       const input: UpdateRepeatSeriesInput = {
         series_id: taskForm.task_id,
         base_name: taskForm.name,
+        // 空串=清除描述，null=保持现值（后端约定）
+        description: taskForm.description,
         plan_qty: taskForm.plan_qty,
         unit: taskForm.unit,
         frequency: taskForm.frequency,
@@ -838,7 +840,7 @@ async function handleSaveTask() {
         : null;
       const input: UpdateTaskInput = {
         task_id: taskForm.task_id,
-        description: descToSend(taskForm.description),
+        description: taskForm.description,
         name: taskForm.name,
         plan_date: plan_date ?? "",
         plan_qty: taskForm.plan_qty,
@@ -934,6 +936,7 @@ async function openEditRepeatModal(task: Task) {
     taskForm.task_id = series.id;
     taskForm.goal_id = series.goal_id;
     taskForm.name = series.base_name;
+    taskForm.description = series.description ?? "";
     taskForm.plan_date = parseISO(series.start_date).getTime();
     taskForm.end_date = series.end_date
       ? parseISO(series.end_date).getTime()
@@ -965,7 +968,7 @@ async function handleSaveTaskDescription() {
   try {
     const updated = await taskApi.updateTask({
       task_id: taskDescForm.task_id,
-      description: descToSend(taskDescForm.description),
+      description: taskDescForm.description,
     });
     message.success("任务描述已保存");
     showTaskDescModal.value = false;
@@ -1759,15 +1762,8 @@ provide(goalTreeApiKey, treeApi);
             placeholder="如：完成 Vue 练习题"
           />
         </NFormItem>
-        <!-- 任务描述（重复任务创建时由原任务统一管理，不单独设置） -->
-        <NFormItem
-          v-if="
-            taskModalMode === 'edit' ||
-            (taskModalMode === 'create' && !taskForm.is_repeat)
-          "
-          label="任务描述（可选）"
-          :show-feedback="false"
-        >
+        <!-- 任务描述（重复任务创建时应用于所有生成的实例；编辑原任务时级联更新系列） -->
+        <NFormItem label="任务描述（可选）" :show-feedback="false">
           <RichTextEditor
             v-model="taskForm.description"
             placeholder="补充任务详细内容或要求…"

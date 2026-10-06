@@ -218,6 +218,9 @@ pub struct RepeatSplitInput {
     #[serde(default)]
     #[validate(custom(function = "validate_month_days"))]
     pub month_days: Option<Vec<u8>>,
+    /// 任务描述（可选，应用于所有生成的实例）
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// 重复任务系列（原任务）：保存"添加任务-重复任务"生成时的原任务设置，
@@ -228,6 +231,8 @@ pub struct RepeatSeries {
     pub goal_id: String,
     /// 基础名称（不含" - 第N次"后缀）
     pub base_name: String,
+    /// 系列描述（应用于所有实例）
+    pub description: Option<String>,
     pub plan_qty: f64,
     pub unit: String,
     /// 频率：daily | weekly | monthly
@@ -252,6 +257,7 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for RepeatSeries {
             id: row.try_get("id")?,
             goal_id: row.try_get("goal_id")?,
             base_name: row.try_get("base_name")?,
+            description: row.try_get("description")?,
             plan_qty: row.try_get("plan_qty")?,
             unit: row.try_get("unit")?,
             frequency: row.try_get("frequency")?,
@@ -287,6 +293,9 @@ pub struct UpdateRepeatSeriesInput {
     #[serde(default)]
     #[validate(custom(function = "validate_month_days"))]
     pub month_days: Option<Vec<u8>>,
+    /// 任务描述（None=保持现值；提供时经净化后级联更新所有实例）
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// 更新重复任务系列结果（供前端刷新进度）

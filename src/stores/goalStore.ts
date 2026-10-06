@@ -105,19 +105,28 @@ export const useGoalStore = defineStore("goal", () => {
     return null;
   }
 
+  /** 局部更新未命中时的兜底：静默全量重拉，保证界面最终与后端一致 */
+  function fallbackRefetch() {
+    void Promise.all([fetchGoalTree(), fetchProgresses()]).catch(() => {});
+  }
+
   function updateTaskLocally(task: Task): boolean {
     function search(nodes: GoalTreeNode[]): boolean {
       for (const node of nodes) {
         const idx = node.tasks.findIndex((t) => t.id === task.id);
         if (idx >= 0) {
           node.tasks[idx] = task;
+          // 替换数组引用：确保虚拟列表（NVirtualList 按 items 引用重算）也能感知变化
+          node.tasks = node.tasks.slice();
           return true;
         }
         if (search(node.sub_goals)) return true;
       }
       return false;
     }
-    return search(goalTree.value);
+    const ok = search(goalTree.value);
+    if (!ok) fallbackRefetch();
+    return ok;
   }
 
   function removeTaskLocally(taskId: string): string | null {
@@ -127,6 +136,8 @@ export const useGoalStore = defineStore("goal", () => {
         if (idx >= 0) {
           const goalId = node.tasks[idx].goal_id;
           node.tasks.splice(idx, 1);
+          // 替换数组引用：确保虚拟列表感知变化
+          node.tasks = node.tasks.slice();
           return goalId;
         }
         const found = search(node.sub_goals);
@@ -134,12 +145,17 @@ export const useGoalStore = defineStore("goal", () => {
       }
       return null;
     }
-    return search(goalTree.value);
+    const goalId = search(goalTree.value);
+    if (goalId === null) fallbackRefetch();
+    return goalId;
   }
 
   function updateGoalLocally(goal: Goal): boolean {
     const node = findGoalNode(goal.id);
-    if (!node) return false;
+    if (!node) {
+      fallbackRefetch();
+      return false;
+    }
     node.goal = goal;
     return true;
   }

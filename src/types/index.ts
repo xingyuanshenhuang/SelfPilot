@@ -58,6 +58,8 @@ export interface RepeatSplitInput {
   weekdays?: number[];
   /** 每月几号（1-31），仅 monthly 有效 */
   month_days?: number[];
+  /** 任务描述（可选，应用于所有生成的实例） */
+  description?: string | null;
 }
 
 /** 智能拆解策略 */
@@ -123,6 +125,8 @@ export interface RepeatSeries {
   goal_id: string;
   /** 基础名称（不含" - 第N次"后缀） */
   base_name: string;
+  /** 系列描述（应用于所有实例） */
+  description: string | null;
   plan_qty: number;
   unit: string;
   /** 频率：daily | weekly | monthly */
@@ -149,6 +153,8 @@ export interface UpdateRepeatSeriesInput {
   end_date?: string | null;
   weekdays?: number[];
   month_days?: number[];
+  /** 任务描述：不传=保持现值，传空串=清除 */
+  description?: string | null;
 }
 
 /** 更新重复任务系列结果 */
