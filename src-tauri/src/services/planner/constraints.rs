@@ -43,20 +43,24 @@ pub struct CompiledSpec {
     /// 单日计划量上限（None = 不限）
     pub max_daily_qty: Option<f64>,
     /// 单日时长上限（小时；None = 不限）
+    #[allow(dead_code)] // Phase 3/4 消费：容量预算/重规划比较
     pub max_daily_hours: Option<f64>,
     /// 单日任务条数上限（None = 不限）
     pub max_daily_tasks: Option<f64>,
     /// 单任务最小粒度（None = 未设置）
     pub min_chunk_qty: Option<f64>,
     /// 跨目标单日任务预算
+    #[allow(dead_code)] // Phase 3/4 消费：跨目标协同（scope=coordinate）
     pub global_daily_task_budget: u32,
     /// 编译后黑名单日集合（blackout_dates ∪ blackout_ranges 展开 ∪ day_availability 表）
+    #[allow(dead_code)] // Phase 3/4 消费：重规划需按日判定黑名单
     pub blackout: BTreeSet<NaiveDate>,
     /// 编译后允许的星期（升序去重；None 输入回落为全周 0..=6）
     pub allowed_weekdays: Vec<u8>,
     /// 周末容量系数（A 请求 > 画像 > 默认 1.0）
     pub weekend_factor: f64,
     /// 实际生效的习惯画像信任度（门控值 × 用户信任度；画像缺失时门控 = 1.0）
+    #[allow(dead_code)] // Phase 3/4 消费：习惯画像修正
     pub adapt_strength: f64,
     /// 平滑与迟滞参数
     pub smoothing: SmoothingPolicy,

@@ -47,6 +47,7 @@ import GoalTreeNodeItem, {
   type GoalTreeApi,
 } from "@/components/GoalTreeNodeItem.vue";
 import RichTextEditor from "@/components/RichTextEditor.vue";
+import SmartSplitDialog from "@/components/SmartSplitDialog.vue";
 
 const goalStore = useGoalStore();
 const taskStore = useTaskStore();
@@ -586,6 +587,21 @@ function openSplitModal(goal: Goal) {
     : tomorrow + 86400000 * 6;
   splitForm.per_day_qty = null;
   showSplitModal.value = true;
+}
+
+// ===== 智能拆解 (Beta) 弹窗 =====
+const smartSplitGoal = ref<Goal | null>(null);
+const showSmartSplitModal = ref(false);
+
+function openSmartSplitModal(goal: Goal) {
+  smartSplitGoal.value = goal;
+  showSmartSplitModal.value = true;
+}
+
+async function handleSmartSplitSuccess() {
+  await goalStore.fetchGoalTree();
+  await goalStore.fetchProgresses();
+  if (smartSplitGoal.value) expandedNodes.value.add(smartSplitGoal.value.id);
 }
 
 async function handleSmartSplit() {
@@ -1316,6 +1332,7 @@ const treeApi: GoalTreeApi = {
   openCreateTaskModal,
   openEditGoalModal,
   openSplitModal,
+  openSmartSplitModal,
   handleReplanPreview,
   handleDeleteGoal,
   buildTaskActions,
@@ -1741,6 +1758,14 @@ provide(goalTreeApiKey, treeApi);
         </NSpace>
       </template>
     </NModal>
+
+    <!-- 智能拆解 (Beta) 弹窗 -->
+    <SmartSplitDialog
+      v-if="smartSplitGoal"
+      :goal="smartSplitGoal"
+      v-model:show="showSmartSplitModal"
+      @success="handleSmartSplitSuccess"
+    />
 
     <!-- 创建/编辑任务弹窗（含重复任务） -->
     <NModal

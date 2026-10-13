@@ -50,15 +50,18 @@ pub struct PlanSnapshot {
     /// 规划根目标
     pub root_goal: Goal,
     /// 目标子树内全部目标（含根）
+    #[allow(dead_code)] // Phase 3/4 消费：重规划（scope=subtree/coordinate）
     pub goals: Vec<Goal>,
     /// 时间视界内的日槽列表（装配时的基础口径：无黑名单、全周可用、
     /// weekend_factor=1.0；编译后的最终口径见 constraints::CompiledSpec.days）
+    #[allow(dead_code)] // Phase 3/4 消费：重规划需比对装配口径与编译口径
     pub days: Vec<DaySlot>,
     /// 活跃任务列表（子树内 status NOT IN ('done','skipped')）
     pub active_tasks: Vec<Task>,
     /// 依赖边：task_id → 其前置任务 id 列表（子树内任务间的依赖）
     pub deps: HashMap<String, Vec<String>>,
     /// 既有负载：日期 → 子树外目标当日计划量合计（用于扣除当日可用额度）
+    #[allow(dead_code)] // Phase 3/4 消费：跨目标协同负载扣除
     pub external_load: HashMap<NaiveDate, f64>,
 }
 
@@ -68,6 +71,7 @@ impl PlanSnapshot {
     /// 口径：`W = Σ max(0, plan_qty − actual_qty)`，求和范围为
     /// `status NOT IN ('done','skipped')` 的活跃任务（`active_tasks`
     /// 已在装配时按该口径过滤）。
+    #[allow(dead_code)] // Phase 3/4 消费：重规划（源 B）需要剩余工作量口径
     pub fn remaining_qty(&self) -> f64 {
         self.active_tasks
             .iter()

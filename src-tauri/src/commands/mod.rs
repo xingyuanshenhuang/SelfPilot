@@ -3,6 +3,7 @@ pub mod encouragement;
 pub mod goal;
 pub mod progress;
 pub mod settings;
+pub mod split_planner;
 pub mod stats;
 pub mod task;
 
@@ -28,6 +29,8 @@ pub fn build_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send
         goal::repeat_split,
         goal::get_repeat_series,
         goal::update_repeat_series,
+        split_planner::smart_split_preview,
+        split_planner::smart_split_apply,
         goal::replan_preview,
         goal::replan_goal,
         goal::move_goal,

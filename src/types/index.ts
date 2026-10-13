@@ -618,3 +618,219 @@ export interface DeleteTasksBatchResult {
   /** 受影响的 goal_id 列表（去重） */
   affected_goal_ids: string[];
 }
+
+// ============================================================================
+// 智能拆解 (Beta) —— 与 Rust 侧 smart_split_preview / smart_split_apply 契约对应
+// 字段名为 camelCase，与 Rust serde 默认命名一致。
+// ============================================================================
+
+/** 拆解模式（与 Rust PlanMode snake_case 对齐）：auto=全自动 | assisted=返回候选 | preview=只算不落库 */
+export type PlanMode = "auto" | "assisted" | "preview";
+
+/** 目标客观约束（习惯/排产求解所需的事实） */
+export interface Objective {
+  /** 目标总量（空=使用 goal.total_qty） */
+  total_qty?: number;
+  /** 单位（空=使用 goal.unit） */
+  unit?: string;
+  /** 时间范围 */
+  horizon?: {
+    start_date?: string;
+    end_date?: string;
+  };
+  /** 缓冲天数（追加在 horizon 末尾的冗余天数，默认 0） */
+  buffer_days?: number;
+}
+
+/** 拆解形状偏好（与 Rust SplitShape snake_case 对齐，7 值） */
+export type SplitShape =
+  | "auto"
+  | "even"
+  | "front_loaded"
+  | "back_loaded"
+  | "phased"
+  | "spaced_repetition"
+  | "milestone";
+
+/** 拆解模式（计划粒度规则）：by_day=每日一任务 | by_work_chunk=按次 | stepped=阶梯递进 */
+export type SplitPattern = "by_day" | "by_work_chunk" | "stepped";
+
+/** 任务类型（与 Rust TaskType snake_case 对齐） */
+export type TaskType = "learn" | "review" | "practice" | "milestone";
+
+/** 可行性状态（与 Rust FeasibilityStatus snake_case 对齐） */
+export type FeasibilityStatus = "feasible" | "feasible_with_warnings" | "infeasible";
+
+/** 硬约束：黑名单日期/范围、允许星期、每日上限 */
+export interface HardConstraints {
+  blackout_dates?: string[];
+  blackout_ranges?: { start?: string; end?: string }[];
+  /** 0=周日, 1-6=周一至周六 */
+  allowed_weekdays?: number[];
+  max_daily_qty?: number;
+  /** 单一 chunk 最小数量 */
+  min_chunk_qty?: number;
+  /** 每日最大可用时长（小时） */
+  max_daily_hours?: number;
+  /** 每日最大任务数 */
+  max_daily_tasks?: number;
+}
+
+/** 软约束：倾向跳过的日期（可被可行性逻辑放宽） */
+export interface SoftConstraints {
+  /** 倾向跳过的日期（宁可在这些天少排） */
+  prefer_skip_dates?: string[];
+  /** 优先 weekday 分布在宽松日期 */
+  prefer_relaxed_weekdays?: boolean;
+  /** 紧迫阶段（靠近截止前 N 天）提高节奏 */
+  tighten_near_deadline_days?: number;
+}
+
+/** 结构偏好 */
+export interface SplitStructure {
+  shape?: SplitShape;
+  /** 阶段划分（按顺序） */
+  phases?: { name: string; weight?: number }[];
+  /** 固定复习间隔天数（stepped/复习型） */
+  review?: { interval_days?: number };
+  /** 计划粒度 */
+  interval?: SplitPattern;
+}
+
+/** 语义偏好 */
+export interface SemanticPrefs {
+  /** 大纲（阶段/主题列表），用于命名 */
+  outline?: string[];
+  /** 命名模板 */
+  template?: string;
+}
+
+/** 学习/习惯 */
+export interface LearningPrefs {
+  /** 是否启用产物适应 */
+  adapt?: boolean;
+  /** 拟人信任等级 */
+  trust_level?: number;
+}
+
+/** 智能拆解请求 */
+export interface SmartSplitRequest {
+  goal_id: string;
+  /** 契约版本，固定为 2 */
+  api_version: number;
+  mode?: PlanMode;
+  intent?: {
+    objective?: Objective;
+    horizon?: { start_date?: string; end_date?: string };
+    buffer_days?: number;
+    total_qty_override?: number;
+    unit_override?: string;
+  };
+  constraints?: {
+    hard?: HardConstraints;
+    soft?: SoftConstraints;
+  };
+  structure?: SplitStructure;
+  semantic?: SemanticPrefs;
+  learning?: LearningPrefs;
+  /** 兼容期标志 */
+  legacy?: boolean;
+  /** 是否返回解释 */
+  explain?: boolean;
+  /** 试运行（不产生副作用） */
+  dry_run?: boolean;
+}
+
+/** 可行性补救措施 */
+export interface Remedy {
+  /** 补救类型（如 extend_horizon / reduce_qty / add_days ...） */
+  type: string;
+  label: string;
+  /** 参数增量（plain object，前端可合并回表单） */
+  delta: Record<string, unknown>;
+  /** 补救后的 slack_ratio */
+  resulting_slack_ratio: number;
+  /** 代价描述 */
+  cost: string;
+  /** 权衡描述 */
+  tradeoff: string;
+}
+
+/** 计划明细项 */
+export interface PlanItem {
+  seq: number;
+  name: string;
+  description?: string;
+  /** 计划日期 yyyy-MM-dd */
+  plan_date: string;
+  plan_qty: number;
+  unit: string;
+  estimated_hours?: number;
+  task_type: TaskType;
+  phase?: string;
+  stage_hint?: string;
+  /** 依赖的前序 seq 列表 */
+  depends_on_seq: number[];
+  rationale?: string;
+  confidence?: number;
+}
+
+/** 可行性结果 */
+export interface Feasibility {
+  status: FeasibilityStatus;
+  /** 覆盖到的有效计划天数 */
+  effective_days: number;
+  effective_capacity_total: number;
+  required_capacity: number;
+  /** 松弛比（effective - required）/ effective；>=0 表可行 */
+  slack_ratio: number;
+  peak_day_load: number;
+  avg_day_load: number;
+  remedies: Remedy[];
+}
+
+/** 诊断信息 */
+export interface SplitDiagnostics {
+  applied_rules: string[];
+  habit_profile?: {
+    preferred_weekdays?: number[];
+    avg_daily_capacity?: number;
+  };
+  warnings: string[];
+}
+
+/** 摘要 */
+export interface SplitSummary {
+  task_count: number;
+  total_allocated_qty: number;
+  /** 总量守恒校验 */
+  conservation_ok: boolean;
+}
+
+/** 计划解析结果 */
+export interface SplitResolved {
+  pattern: SplitPattern;
+  objective: Objective;
+  horizon: {
+    start: string;
+    end: string;
+    buffer_days: number;
+  };
+  total_qty: number;
+  unit: string;
+}
+
+/** 智能拆解计划结果（preview / apply 共用） */
+export interface SplitPlan {
+  plan_id: string;
+  goal_id: string;
+  api_version: number;
+  generated_at: string;
+  engine_version: string;
+  plan_hash?: string;
+  resolved: SplitResolved;
+  feasibility: Feasibility;
+  diagnostics: SplitDiagnostics;
+  items: PlanItem[];
+  summary: SplitSummary;
+}

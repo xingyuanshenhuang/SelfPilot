@@ -16,6 +16,8 @@ export interface GoalTreeApi {
   openEditGoalModal: (goal: Goal) => void;
   /** 打开自动拆解配置弹窗（整合视频拆解与时间预算拆解） */
   openSplitModal: (goal: Goal) => void;
+  /** 打开智能拆解 (Beta) 弹窗 */
+  openSmartSplitModal: (goal: Goal) => void;
   handleReplanPreview: (goal: Goal) => void;
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
@@ -466,6 +468,30 @@ const isDraggingThisGoal = computed(
               </NButton>
             </template>
             按截止日期均分 / 按时间预算 / 自定义日期范围
+          </NTooltip>
+          <!-- 智能拆解 (Beta)：约束驱动 + 可行性校验 -->
+          <NTooltip placement="top">
+            <template #trigger>
+              <NButton
+                size="tiny"
+                type="info"
+                ghost
+                :disabled="node.goal.total_qty <= 0"
+                @click="api.openSmartSplitModal(node.goal)"
+              >
+                <template #icon><Icon icon="mdi:creation" /></template>
+                智能拆解
+                <NTag
+                  size="tiny"
+                  type="info"
+                  :bordered="false"
+                  class="ml-1 !px-1"
+                >
+                  Beta
+                </NTag>
+              </NButton>
+            </template>
+            约束驱动排产：时间范围/容量/星期/形状，支持可行性预览与补救
           </NTooltip>
           <!-- 重新规划 -->
           <NButton

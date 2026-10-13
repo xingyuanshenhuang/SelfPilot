@@ -27,9 +27,6 @@
 //! 依赖，SHA-256 以纯函数就地实现（[`sha256_hex`]），输出格式
 //! `sha256:<64 hex>`。
 
-// Phase 2 命令接入后移除（与 planner/mod.rs 同步；本模块 solve 尚无 crate 内调用方）
-#![allow(dead_code, unused_imports)]
-
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, Duration, NaiveDate};
