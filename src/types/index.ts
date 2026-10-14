@@ -834,3 +834,217 @@ export interface SplitPlan {
   items: PlanItem[];
   summary: SplitSummary;
 }
+
+// ============================================================================
+// 重新规划（阶段3B）—— 与 Rust 侧 models.rs §5.4 DTO 契约对应
+// 字段名 snake_case，与 Rust serde 默认命名一致；Option 映射为 TS 可空。
+// ============================================================================
+
+/** 规划范围：single（单目标）| subtree（含子目标）| coordinate（跨目标协同） */
+export type ReplanScope = "single" | "subtree" | "coordinate";
+
+/** 单任务变更类型 */
+export type ReplanChangeType =
+  | "date_moved"
+  | "qty_changed"
+  | "both"
+  | "retained"
+  | "locked"
+  | "new";
+
+/** 不可行处置候选 */
+export type ReplanOptionKind =
+  | "extend_deadline"
+  | "raise_intensity"
+  | "trim_scope"
+  | "accept_risk";
+
+/** 计划告警类型 */
+export type ReplanWarningKind =
+  | "overflow_tail"
+  | "capacity_tight"
+  | "cycle_detected"
+  | "iteration_capped"
+  | "low_fairness";
+
+/** what-if 覆盖参数（全部可选，None=使用生效策略值） */
+export interface ReplanOverrides {
+  /** 截止日期 yyyy-MM-dd */
+  deadline?: string | null;
+  /** 每日容量（小时/量纲） */
+  daily_capacity?: number;
+  /** 强度倍率 */
+  intensity?: number;
+  /** 是否尊重锁定任务 */
+  respect_locks?: boolean;
+  /** 逐任务排除本次调整 */
+  excluded_task_ids?: string[];
+}
+
+/** 重新规划求解（预览/仿真）输入 */
+export interface ReplanSolveInput {
+  goal_id: string;
+  scope?: ReplanScope;
+  /** 协同规划时的目标 ID 列表（scope=coordinate 时必填） */
+  goal_ids?: string[];
+  /** 仅仿真（不落库） */
+  dry_run?: boolean;
+  /** 本次覆盖策略（what-if 参数，不写回数据库） */
+  overrides?: ReplanOverrides;
+  /** 提交校验：预览时返回的 plan_hash */
+  expected_plan_hash?: string;
+}
+
+/** 重新规划提交输入 */
+export interface ReplanApplyInput {
+  goal_id: string;
+  /** 预览时返回的 plan_hash（一致性校验） */
+  plan_hash: string;
+  scope?: ReplanScope;
+  /** 预览时携带的事件 id（预览阶段已落 previewed 事件时回填） */
+  event_id?: string;
+  /** 预览时使用的 what-if 覆盖参数（须与预览一致） */
+  overrides?: ReplanOverrides;
+  /** 逐任务排除（与 overrides.excluded_task_ids 合并） */
+  excluded_task_ids?: string[];
+}
+
+/** 单任务放置结果 */
+export interface TaskPlacement {
+  task_id: string;
+  name: string;
+  old_plan_date: string | null;
+  new_plan_date: string | null;
+  old_plan_qty: number;
+  new_plan_qty: number;
+  unit: string;
+  change_type: ReplanChangeType;
+  /** 决策理由枚举 */
+  reason: string;
+  /** 人类可读理由 */
+  reason_text: string;
+  locked: boolean;
+  /** 依赖下界（若由依赖产生） */
+  dep_lower_bound: string | null;
+}
+
+/** 不可行处置候选 */
+export interface ReplanOption {
+  kind: ReplanOptionKind;
+  label: string;
+  /** 量化后果，如 { days:16, new_deadline:"2026-09-15" } */
+  payload: Record<string, unknown>;
+  /** 是否含风险（超强度上限等） */
+  risky: boolean;
+}
+
+/** 可行性报告 */
+export interface FeasibilityReport {
+  feasible: boolean;
+  workload: number;
+  capacity: number;
+  /** 裕度 (capacity - workload) / capacity */
+  slack: number;
+  level: "tight" | "normal" | "relaxed";
+  /** 不可行原因：capacity_shortfall | dependency_chain_too_long */
+  reason: string | null;
+  options: ReplanOption[];
+}
+
+/** 规划后单日负载 */
+export interface DayLoadAfter {
+  date: string;
+  before_tasks: number;
+  before_qty: number;
+  after_tasks: number;
+  after_qty: number;
+}
+
+/** 计划指标 */
+export interface ReplanMetrics {
+  moved: number;
+  qty_changed: number;
+  retained: number;
+  locked: number;
+  overdue_recovered: number;
+  /** 跨目标协同时的 Jain 公平指数 */
+  jain_index: number | null;
+  /** 预计完成日期 */
+  predicted_finish: string | null;
+  /** 求解耗时（毫秒） */
+  elapsed_ms: number;
+}
+
+/** 计划告警 */
+export interface PlanWarning {
+  kind: ReplanWarningKind;
+  message: string;
+  task_ids: string[];
+}
+
+/** 重新规划完整计划（预览与提交共用） */
+export interface ReplanPlan {
+  goal_id: string;
+  scope: ReplanScope;
+  feasibility: FeasibilityReport;
+  placements: TaskPlacement[];
+  /** 日期 → 规划后负载（含外部目标） */
+  day_load: DayLoadAfter[];
+  warnings: PlanWarning[];
+  metrics: ReplanMetrics;
+  /** 内容摘要，提交时校验 */
+  plan_hash: string;
+  /** 本次触发原因（用于 UI 徽标） */
+  trigger: string | null;
+}
+
+/** 提交结果 */
+export interface ReplanApplyResult {
+  event_id: string;
+  goal_id: string;
+  moved: number;
+  qty_changed: number;
+  retained: number;
+  /** 受影响目标 ID（供前端局部刷新进度链） */
+  affected_goal_ids: string[];
+  tasks: Task[];
+}
+
+/** 重规划事件（时间线分页项） */
+export interface ReplanEvent {
+  id: string | null;
+  goal_id: string | null;
+  trigger_type: string | null;
+  trigger_source: string | null;
+  severity: string | null;
+  status: string | null;
+  plan_hash: string | null;
+  snapshot_hash: string | null;
+  before_summary: string | null;
+  after_summary: string | null;
+  metrics: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  applied_at: string | null;
+}
+
+/** 事件差异 */
+export interface ReplanEventDiff {
+  id: string | null;
+  event_id: string | null;
+  task_id: string | null;
+  change_type: ReplanChangeType | null;
+  old_plan_date: string | null;
+  new_plan_date: string | null;
+  old_plan_qty: number | null;
+  new_plan_qty: number | null;
+  old_unit: string | null;
+  new_unit: string | null;
+  reason: string | null;
+}
+
+/** 事件详情（时间线展开） */
+export interface ReplanEventDetail {
+  event: ReplanEvent;
+  diffs: ReplanEventDiff[];
+}

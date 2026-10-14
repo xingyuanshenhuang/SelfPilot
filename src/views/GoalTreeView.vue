@@ -11,7 +11,6 @@ import {
   NFormItem,
   NModal,
   NEmpty,
-  NDataTable,
   NCheckbox,
   NCheckboxGroup,
   NRadioGroup,
@@ -19,7 +18,7 @@ import {
   useMessage,
   useDialog,
 } from "naive-ui";
-import type { DataTableColumns, DropdownOption } from "naive-ui";
+import type { DropdownOption } from "naive-ui";
 import { Icon } from "@iconify/vue";
 import { useGoalStore } from "@/stores/goalStore";
 import { useTaskStore } from "@/stores/taskStore";
@@ -30,7 +29,6 @@ import type {
   Goal,
   GoalTreeNode,
   Task,
-  ReplanPreview,
   CreateTaskInput,
   UpdateTaskInput,
   CreateGoalInput,
@@ -48,6 +46,8 @@ import GoalTreeNodeItem, {
 } from "@/components/GoalTreeNodeItem.vue";
 import RichTextEditor from "@/components/RichTextEditor.vue";
 import SmartSplitDialog from "@/components/SmartSplitDialog.vue";
+import ReplanPreviewDrawer from "@/components/ReplanPreviewDrawer.vue";
+import ReplanEventTimeline from "@/components/ReplanEventTimeline.vue";
 
 const goalStore = useGoalStore();
 const taskStore = useTaskStore();
@@ -159,10 +159,10 @@ const backfillForm = reactive({
   unit: "个",
 });
 
-// ===== 重新规划弹窗 =====
-const showReplanModal = ref(false);
-const replanPreview = ref<ReplanPreview | null>(null);
-const replanGoalId = ref("");
+// ===== 重新规划（阶段3B 抽屉 + 历史时间线）=====
+const showReplanDrawer = ref(false);
+const showReplanHistory = ref(false);
+const replanGoal = ref<Goal | null>(null);
 
 // ===== 任务描述弹窗（查看 + 编辑）=====
 const showTaskDescModal = ref(false);
@@ -1103,44 +1103,26 @@ async function handleDeleteBatch(tasks: Task[]) {
   }
 }
 
-// ===== 重新规划 =====
-async function handleReplanPreview(goal: Goal) {
-  try {
-    replanPreview.value = await goalApi.replanPreview(goal.id);
-    replanGoalId.value = goal.id;
-    showReplanModal.value = true;
-  } catch (e) {
-    message.error(String(e));
-  }
+// ===== 重新规划（阶段3B）=====
+function openReplanDrawer(goal: Goal) {
+  replanGoal.value = goal;
+  showReplanDrawer.value = true;
 }
-
-async function handleReplanConfirm() {
-  try {
-    const result = await goalApi.replanGoal(replanGoalId.value);
-    message.success(
-      `已重新规划：更新 ${result.updated_count} 个任务，保留 ${result.retained_count} 个手动任务`,
-    );
-    showReplanModal.value = false;
-    replanPreview.value = null;
-    await goalStore.fetchGoalTree();
-    await goalStore.fetchProgresses();
-  } catch (e) {
-    message.error(String(e));
-  }
+function openReplanHistory(goal: Goal) {
+  replanGoal.value = goal;
+  showReplanHistory.value = true;
 }
-
-const replanColumns: DataTableColumns<ReplanPreview["items"][0]> = [
-  { title: "日期", key: "plan_date", width: 110 },
-  { title: "任务名", key: "name", ellipsis: { tooltip: true } },
-  { title: "原计划", key: "old_plan_qty", width: 90 },
-  {
-    title: "新计划",
-    key: "new_plan_qty",
-    width: 100,
-    render: (row) =>
-      row.retained ? `${row.new_plan_qty} (保留)` : `${row.new_plan_qty}`,
-  },
-];
+/** 应用/撤销后刷新目标树与进度 */
+async function handleReplanSuccess() {
+  await goalStore.fetchGoalTree();
+  await goalStore.fetchProgresses();
+  showReplanDrawer.value = false;
+}
+async function handleReplanHistorySuccess() {
+  await goalStore.fetchGoalTree();
+  await goalStore.fetchProgresses();
+  showReplanHistory.value = false;
+}
 
 // ===== 辅助函数 =====
 function getDaysLeft(deadline: string | null): string {
@@ -1333,7 +1315,8 @@ const treeApi: GoalTreeApi = {
   openEditGoalModal,
   openSplitModal,
   openSmartSplitModal,
-  handleReplanPreview,
+  handleReplanPreview: openReplanDrawer,
+  openReplanHistory,
   handleDeleteGoal,
   buildTaskActions,
   handleTaskAction,
@@ -1991,43 +1974,19 @@ provide(goalTreeApiKey, treeApi);
       </template>
     </NModal>
 
-    <!-- 重新规划预览弹窗 -->
-    <NModal
-      v-model:show="showReplanModal"
-      preset="card"
-      title="重新规划预览"
-      style="width: 720px"
-    >
-      <div v-if="replanPreview" class="space-y-3">
-        <div class="text-sm text-gray-600 dark:text-gray-300 space-y-1">
-          <div>
-            目标：<strong>{{ replanPreview.goal_name }}</strong>
-          </div>
-          <div>
-            剩余天数：<strong>{{ replanPreview.remaining_days }} 天</strong> ｜
-            剩余总量：<strong>{{ replanPreview.remaining_qty }}</strong>
-          </div>
-          <div>
-            每日基础量：{{ replanPreview.daily_base }} ｜ 余数分前
-            {{ replanPreview.remainder }} 天
-          </div>
-        </div>
-        <NDataTable
-          :columns="replanColumns"
-          :data="replanPreview.items"
-          :max-height="320"
-          size="small"
-          :bordered="false"
-        />
-      </div>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="showReplanModal = false">取消</NButton>
-          <NButton type="warning" @click="handleReplanConfirm"
-            >确认重新规划</NButton
-          >
-        </NSpace>
-      </template>
-    </NModal>
+    <!-- 重新规划抽屉 + 历史时间线（阶段3B） -->
+    <ReplanPreviewDrawer
+      v-if="replanGoal"
+      :goal="replanGoal"
+      v-model:show="showReplanDrawer"
+      @success="handleReplanSuccess"
+      @open-history="openReplanHistory(replanGoal)"
+    />
+    <ReplanEventTimeline
+      v-if="replanGoal"
+      :goal="replanGoal"
+      v-model:show="showReplanHistory"
+      @success="handleReplanHistorySuccess"
+    />
   </div>
 </template>

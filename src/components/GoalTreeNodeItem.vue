@@ -19,6 +19,8 @@ export interface GoalTreeApi {
   /** 打开智能拆解 (Beta) 弹窗 */
   openSmartSplitModal: (goal: Goal) => void;
   handleReplanPreview: (goal: Goal) => void;
+  /** 打开重新规划历史时间线 */
+  openReplanHistory: (goal: Goal) => void;
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
   handleTaskAction: (key: string, task: Task) => void;
@@ -498,12 +500,25 @@ const isDraggingThisGoal = computed(
             size="tiny"
             type="warning"
             ghost
-            :disabled="!node.goal.deadline"
             @click="api.handleReplanPreview(node.goal)"
           >
             <template #icon><Icon icon="mdi:refresh-circle" /></template>
             重新规划
           </NButton>
+          <!-- 重新规划历史 -->
+          <NTooltip placement="top">
+            <template #trigger>
+              <NButton
+                size="tiny"
+                quaternary
+                @click="api.openReplanHistory(node.goal)"
+              >
+                <template #icon><Icon icon="mdi:history" /></template>
+                历史
+              </NButton>
+            </template>
+            查看该目标的重新规划历史并可撤销
+          </NTooltip>
           <!-- 任务 -->
           <NButton
             size="tiny"
