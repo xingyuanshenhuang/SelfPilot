@@ -33,18 +33,19 @@ pub fn not_found(entity: &str, id: &str) -> AppError {
 // INSERT task helper
 // ============================================================
 
-/// tasks 表 17 列 INSERT 语句
+/// tasks 表 18 列 INSERT 语句
 ///
 /// 统一原先 5 处 16 列 + 2 处 15 列（缺 estimated_hours）的实现。
 /// overdue_date 不包含在此 INSERT 中：该字段由逾期检测异步写入，
 /// 新建任务时数据库列默认为 NULL。
 /// description 迁移 019 新增；自动拆解/重复任务生成时无描述，默认为 NULL。
+/// updated_at 迁移 022 新增；调用方可传 None（新任务回退到迁移时回填的旧值）。
 pub const INSERT_TASK_SQL: &str = "INSERT INTO tasks \
 (id, goal_id, description, stage_id, parent_id, path, name, plan_date, plan_qty, actual_qty, \
-unit, status, is_manual, source, sort_order, created_at, estimated_hours) \
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+unit, status, is_manual, source, sort_order, created_at, estimated_hours, updated_at) \
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-/// 执行一次任务 INSERT（17 列）
+/// 执行一次任务 INSERT（18 列）
 ///
 /// 统一原先 7 处 INSERT INTO tasks 样板，并修复 backup.rs 中 15 列缺
 /// estimated_hours 的不一致问题。
@@ -67,6 +68,7 @@ pub async fn insert_task_row(pool: &SqlitePool, t: &Task) -> AppResult<()> {
         .bind(t.sort_order)
         .bind(&t.created_at)
         .bind(t.estimated_hours)
+        .bind(&t.updated_at)
         .execute(pool)
         .await?;
     Ok(())

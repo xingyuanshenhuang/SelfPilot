@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tauri::State;
-use crate::util::{new_uuid, now_local_ts};
+use crate::util::{new_uuid, now_local_ts, now_updated_at_ts};
 
 use crate::db::models::{
     CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
@@ -443,6 +443,7 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
 
     let today = chrono::Local::now().date_naive();
     let mut tasks = split_service::split_repeat_tasks(&goal, &input, today)?;
+    let updated_ts = now_updated_at_ts();
 
     // 用户选择了重复范围（end > start）时创建系列行并关联实例
     let is_repeat_range = input
@@ -491,8 +492,8 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
     for task in &tasks {
         sqlx::query(
             "INSERT INTO tasks (id, goal_id, stage_id, parent_id, path, name, plan_date, description,
-             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             plan_qty, actual_qty, unit, status, is_manual, source, sort_order, created_at, estimated_hours, repeat_series_id, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task.id)
         .bind(&task.goal_id)
@@ -512,6 +513,7 @@ pub async fn repeat_split(input: RepeatSplitInput, state: State<'_, DbPool>) -> 
         .bind(&task.created_at)
         .bind(task.estimated_hours)
         .bind(&task.repeat_series_id)
+        .bind(&updated_ts)
         .execute(&mut *tx)
         .await?;
     }

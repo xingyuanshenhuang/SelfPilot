@@ -1,5 +1,5 @@
 use tauri::State;
-use crate::util::{new_uuid, now_local_ts};
+use crate::util::{new_uuid, now_local_ts, now_updated_at_ts};
 
 use crate::db::models::{
     CalendarTask, CompleteTaskInput, CreateTaskInput, DeleteTaskResult, DeleteTasksBatchResult,
@@ -20,11 +20,12 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
 
     let id = new_uuid();
     let now = now_local_ts();
+    let updated_ts = now_updated_at_ts();
     let plan_qty = input.plan_qty.unwrap_or(1.0);
     let unit = input.unit.unwrap_or_default();
     let path = format!("/{}/{}", input.goal_id, id);
 
-    // R-03：使用 helpers::insert_task_row 统一 17 列 INSERT
+    // R-03：使用 helpers::insert_task_row 统一 18 列 INSERT
     // 注：原代码 parent_id 绑定的是 input.goal_id（历史行为），此处保留以避免引入行为变化
     let new_task = Task {
         id: id.clone(),
@@ -46,6 +47,8 @@ pub async fn create_task(input: CreateTaskInput, state: State<'_, DbPool>) -> Ap
         created_at: now.clone(),
         estimated_hours: None,
         repeat_series_id: None,
+        schedule_locked: None,
+        updated_at: Some(updated_ts),
     };
     helpers::insert_task_row(&state.0, &new_task).await?;
 
@@ -108,9 +111,10 @@ pub async fn complete_task(
         "pending"
     };
 
-    sqlx::query("UPDATE tasks SET actual_qty = ?, status = ? WHERE id = ?")
+    sqlx::query("UPDATE tasks SET actual_qty = ?, status = ?, updated_at = ? WHERE id = ?")
         .bind(input.actual_qty)
         .bind(new_status)
+        .bind(now_updated_at_ts())
         .bind(&input.task_id)
         .execute(&state.0)
         .await?;
@@ -134,7 +138,8 @@ pub async fn skip_task(task_id: String, state: State<'_, DbPool>) -> AppResult<T
         .await?
         .ok_or_else(|| helpers::not_found("任务", &task_id))?;
 
-    sqlx::query("UPDATE tasks SET status = 'skipped' WHERE id = ?")
+    sqlx::query("UPDATE tasks SET status = 'skipped', updated_at = ? WHERE id = ?")
+        .bind(now_updated_at_ts())
         .bind(&task_id)
         .execute(&state.0)
         .await?;
@@ -279,9 +284,10 @@ pub async fn backfill_task(
     };
 
     // 只更新 actual_qty 和 status，绝不触碰 plan_qty 或其他任务的计划数量
-    sqlx::query("UPDATE tasks SET actual_qty = ?, status = ? WHERE id = ?")
+    sqlx::query("UPDATE tasks SET actual_qty = ?, status = ?, updated_at = ? WHERE id = ?")
         .bind(new_actual)
         .bind(new_status)
+        .bind(now_updated_at_ts())
         .bind(&input.task_id)
         .execute(&state.0)
         .await?;
@@ -425,8 +431,9 @@ pub async fn update_task_plan_qty(
         return Err(AppError::Param("计划数量不能为负".into()));
     }
 
-    sqlx::query("UPDATE tasks SET plan_qty = ?, is_manual = 1 WHERE id = ?")
+    sqlx::query("UPDATE tasks SET plan_qty = ?, is_manual = 1, updated_at = ? WHERE id = ?")
         .bind(plan_qty)
+        .bind(now_updated_at_ts())
         .bind(&task_id)
         .execute(&state.0)
         .await?;
@@ -490,6 +497,8 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
         updates.push("is_manual = 1".to_string());
     }
 
+    updates.push("updated_at = ?".to_string());
+
     if updates.is_empty() {
         return Err(AppError::Param("未提供任何更新字段".into()));
     }
@@ -517,6 +526,7 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
     if let Some(plan_qty) = input.plan_qty {
         q = q.bind(plan_qty);
     }
+    q = q.bind(now_updated_at_ts());
     q = q.bind(&input.task_id);
     q.execute(&state.0).await?;
 
@@ -530,9 +540,10 @@ pub async fn update_task(input: UpdateTaskInput, state: State<'_, DbPool>) -> Ap
             } else {
                 "pending"
             };
-            sqlx::query("UPDATE tasks SET actual_qty = ?, status = ? WHERE id = ?")
+            sqlx::query("UPDATE tasks SET actual_qty = ?, status = ?, updated_at = ? WHERE id = ?")
                 .bind(plan_qty)
                 .bind(new_status)
+                .bind(now_updated_at_ts())
                 .bind(&input.task_id)
                 .execute(&state.0)
                 .await?;

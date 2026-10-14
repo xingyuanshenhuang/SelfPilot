@@ -76,6 +76,8 @@ pub fn split_goal_into_tasks(goal: &Goal, today: NaiveDate) -> AppResult<Vec<Tas
             created_at: now.clone(),
             estimated_hours: None,
             repeat_series_id: None,
+            schedule_locked: None,
+            updated_at: None,
         });
     }
 
@@ -164,6 +166,8 @@ pub fn split_by_daily_capacity(goal: &Goal, today: NaiveDate) -> AppResult<Vec<T
             created_at: now.clone(),
             estimated_hours: Some(capacity),
             repeat_series_id: None,
+            schedule_locked: None,
+            updated_at: None,
         });
     }
 
@@ -249,6 +253,8 @@ pub fn split_by_date_range(
                     created_at: now.clone(),
                     estimated_hours: Some(qty),
                     repeat_series_id: None,
+                    schedule_locked: None,
+                    updated_at: None,
                 });
             }
         }
@@ -286,6 +292,8 @@ pub fn split_by_date_range(
                     created_at: now.clone(),
                     estimated_hours: None,
                     repeat_series_id: None,
+                    schedule_locked: None,
+                    updated_at: None,
                 });
             }
         }
@@ -634,6 +642,8 @@ pub fn split_repeat_tasks(
             created_at: now.clone(),
             estimated_hours: None,
             repeat_series_id: None,
+            schedule_locked: None,
+            updated_at: None,
         });
     }
 
@@ -657,6 +667,10 @@ mod tests {
             sort_order: 0,
             created_at: "2026-06-24T00:00:00".to_string(),
             daily_capacity: None,
+            priority: 1.0,
+            auto_replan: 1,
+            auto_apply: 0,
+            risk_flag: None,
         }
     }
 

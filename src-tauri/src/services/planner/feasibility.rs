@@ -371,6 +371,10 @@ mod tests {
             sort_order: 0,
             created_at: "2026-10-09 10:00:00".into(),
             daily_capacity: None,
+            priority: 1.0,
+            auto_replan: 1,
+            auto_apply: 0,
+            risk_flag: None,
         }
     }
 
@@ -434,6 +438,8 @@ mod tests {
             created_at: "2026-10-09 10:00:00".into(),
             estimated_hours: None,
             repeat_series_id: None,
+            schedule_locked: None,
+            updated_at: None,
         }
     }
 

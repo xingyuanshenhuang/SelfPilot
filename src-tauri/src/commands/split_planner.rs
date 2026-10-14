@@ -20,7 +20,7 @@ use crate::services::planner::types::{
     FeasibilityStatus, SmartSplitRequest, SplitPlan,
 };
 use crate::services::split_planner;
-use crate::util::{new_uuid, now_local_ts};
+use crate::util::{new_uuid, now_local_ts, now_updated_at_ts};
 
 /// 只计算、不落库的预览命令。
 ///
@@ -97,6 +97,7 @@ pub async fn smart_split_apply(
     let summary_json = serde_json::to_string(&plan.summary)
         .map_err(|_| AppError::Internal("方案摘要序列化失败".into()))?;
     let now = now_local_ts();
+    let updated_ts = now_updated_at_ts();
 
     // 插入方案历史行（is_active = 1）
     sqlx::query(
@@ -167,8 +168,8 @@ pub async fn smart_split_apply(
             "INSERT INTO tasks
              (id, goal_id, stage_id, parent_id, path, name, plan_date, plan_qty,
               actual_qty, unit, status, is_manual, source, sort_order, created_at,
-              estimated_hours, description)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending', 0, 'auto', ?, ?, ?, ?)",
+              estimated_hours, description, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending', 0, 'auto', ?, ?, ?, ?, ?)",
         )
         .bind(&task_id)
         .bind(&req.goal_id)
@@ -183,6 +184,7 @@ pub async fn smart_split_apply(
         .bind(&now)
         .bind(item.estimated_hours)
         .bind(&item.description)
+        .bind(&updated_ts)
         .execute(&mut *tx)
         .await?;
 

@@ -13,6 +13,11 @@ pub fn now_local_ts() -> String {
     Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
+/// 任务更新时间戳，统一格式 `yyyy-MM-dd HH:mm:ss`（重新规划落库/回滚与任务刷新）
+pub fn now_updated_at_ts() -> String {
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 /// 生成新 UUID 字符串
 pub fn new_uuid() -> String {
     Uuid::new_v4().to_string()

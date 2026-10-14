@@ -81,7 +81,7 @@ const SHA256_K: [u32; 64] = [
 ];
 
 /// SHA-256 摘要（输出小写 hex；标准测试向量见单元测试）
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
         0x5be0cd19,
@@ -1765,6 +1765,10 @@ mod tests {
             sort_order: 0,
             created_at: "2026-10-09 10:00:00".into(),
             daily_capacity: None,
+            priority: 1.0,
+            auto_replan: 1,
+            auto_apply: 0,
+            risk_flag: None,
         }
     }
 

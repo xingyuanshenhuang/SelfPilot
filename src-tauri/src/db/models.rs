@@ -82,6 +82,22 @@ fn validate_frequency(s: &str) -> Result<(), ValidationError> {
     }
 }
 
+/// 校验重新规划范围（single | subtree | coordinate）
+fn validate_replan_scope(s: &str) -> Result<(), ValidationError> {
+    if ["single", "subtree", "coordinate"].contains(&s) {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "规划范围必须为 single/subtree/coordinate",
+        ))
+    }
+}
+
+/// `ReplanSolveInput.scope` 缺省值：single（单目标）
+fn default_scope() -> String {
+    "single".to_string()
+}
+
 /// 校验智能拆解策略
 fn validate_split_strategy(s: &str) -> Result<(), ValidationError> {
     if ["by_deadline", "by_capacity", "by_date_range"].contains(&s) {
@@ -148,6 +164,26 @@ pub struct Goal {
     pub created_at: String,
     /// P1-3：每日可用时长（按时间预算拆解时使用，None=未设置）
     pub daily_capacity: Option<f64>,
+    /// 目标优先级权重（A5 公平分摊需求加权，默认 1.0）
+    #[serde(default = "goal_priority_default")]
+    pub priority: f64,
+    /// 是否允许自动触发重排（默认 1）
+    #[serde(default = "one_i64")]
+    pub auto_replan: i64,
+    /// 是否允许无需确认直接应用（默认 0，安全默认）
+    #[serde(default)]
+    pub auto_apply: i64,
+    /// 风险标记：'at_risk' = 用户选择"接受风险"
+    #[serde(default)]
+    pub risk_flag: Option<String>,
+}
+
+fn goal_priority_default() -> f64 {
+    1.0
+}
+
+fn one_i64() -> i64 {
+    1
 }
 
 /// 创建目标的输入参数
@@ -381,6 +417,12 @@ pub struct Task {
     pub estimated_hours: Option<f64>,
     /// 所属重复任务系列 id（由"添加任务-重复任务"生成时写入；普通任务为 NULL）
     pub repeat_series_id: Option<String>,
+    /// 排期锁定来源：manual / pin_date；NULL = 未锁定
+    #[serde(default)]
+    pub schedule_locked: Option<String>,
+    /// 任何字段变更时刷新（撤销可行性判定依赖）
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// 创建任务的输入参数
@@ -936,4 +978,221 @@ pub struct SetTaskDependencyInput {
 pub struct ResetDatabaseInput {
     /// 是否在重置前自动备份当前数据库（推荐开启）
     pub backup: bool,
+}
+
+// ============================================================
+// 重新规划（阶段 3）· 契约类型层（依据设计文档 §5.4）
+// ============================================================
+
+/// 重新规划请求（统一入口参数）
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct ReplanSolveInput {
+    pub goal_id: String,
+    /// 规划范围：single（单目标）| subtree（含子目标）| coordinate（跨目标协同）
+    #[serde(default = "default_scope")]
+    #[validate(custom(function = "validate_replan_scope"))]
+    pub scope: String,
+    /// 协同规划时的目标 ID 列表（scope=coordinate 时必填）
+    #[serde(default)]
+    pub goal_ids: Option<Vec<String>>,
+    /// 是否仅仿真（不落库）
+    #[serde(default)]
+    pub dry_run: bool,
+    /// 本次覆盖策略（what-if 参数，不写回数据库）
+    #[serde(default)]
+    pub overrides: Option<ReplanOverrides>,
+    /// 提交校验：预览时返回的 plan_hash
+    #[serde(default)]
+    pub expected_plan_hash: Option<String>,
+}
+
+/// what-if 覆盖参数（全部可选，None = 使用生效策略值）
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct ReplanOverrides {
+    #[validate(custom(function = "validate_date_format"))]
+    pub deadline: Option<String>,
+    #[validate(custom(function = "validate_qty"))]
+    pub daily_capacity: Option<f64>,
+    #[validate(custom(function = "validate_qty"))]
+    pub intensity: Option<f64>,
+    #[serde(default)]
+    pub respect_locks: Option<bool>,
+    /// 逐任务排除本次调整（用户 reject 的项）
+    #[serde(default)]
+    pub excluded_task_ids: Option<Vec<String>>,
+}
+
+/// 重新规划提交输入（apply 命令入参）
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct ReplanApplyInput {
+    pub goal_id: String,
+    /// 预览时返回的 plan_hash（提交一致性校验）
+    pub plan_hash: String,
+    /// 规划范围（须与预览一致，保证 hash 一致）
+    #[serde(default = "default_scope")]
+    pub scope: String,
+    /// 预览时携带的事件 id（预览阶段已落 previewed 事件时回填）
+    #[serde(default)]
+    pub event_id: Option<String>,
+    /// 预览时使用的 what-if 覆盖参数（须与预览一致，保证 hash 一致）
+    #[serde(default)]
+    pub overrides: Option<ReplanOverrides>,
+    /// 逐任务排除本次调整（与 overrides.excluded_task_ids 合并）
+    #[serde(default)]
+    pub excluded_task_ids: Option<Vec<String>>,
+}
+
+/// 单任务放置结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskPlacement {
+    pub task_id: String,
+    pub name: String,
+    pub old_plan_date: Option<String>,
+    pub new_plan_date: Option<String>,
+    pub old_plan_qty: f64,
+    pub new_plan_qty: f64,
+    pub unit: String,
+    /// date_moved | qty_changed | both | retained | locked | new
+    pub change_type: String,
+    /// 决策理由枚举
+    pub reason: String,
+    /// 人类可读理由
+    pub reason_text: String,
+    pub locked: bool,
+    /// 依赖下界（若由依赖产生）
+    pub dep_lower_bound: Option<String>,
+}
+
+/// 可行性报告
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeasibilityReport {
+    pub feasible: bool,
+    pub workload: f64,
+    pub capacity: f64,
+    /// 裕度 (capacity - workload) / capacity
+    pub slack: f64,
+    /// tight | normal | relaxed
+    pub level: String,
+    /// 不可行时的原因：capacity_shortfall | dependency_chain_too_long
+    pub reason: Option<String>,
+    pub options: Vec<ReplanOption>,
+}
+
+/// 不可行处置候选
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplanOption {
+    /// extend_deadline | raise_intensity | trim_scope | accept_risk
+    pub kind: String,
+    pub label: String,
+    /// 量化后果，如 { "days": 16, "new_deadline": "2026-09-15" }
+    pub payload: serde_json::Value,
+    /// 是否含风险（超强度上限等）
+    pub risky: bool,
+}
+
+/// 重新规划完整计划（预览与提交共用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplanPlan {
+    pub goal_id: String,
+    pub scope: String,
+    pub feasibility: FeasibilityReport,
+    pub placements: Vec<TaskPlacement>,
+    /// 日期 → 规划后负载（含外部目标）
+    pub day_load: Vec<DayLoadAfter>,
+    pub warnings: Vec<PlanWarning>,
+    pub metrics: ReplanMetrics,
+    /// 内容摘要，提交时校验
+    pub plan_hash: String,
+    /// 本次触发原因（用于 UI 徽标）
+    pub trigger: Option<String>,
+}
+
+/// 规划后单日负载
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayLoadAfter {
+    pub date: String,
+    pub before_tasks: i64,
+    pub before_qty: f64,
+    pub after_tasks: i64,
+    pub after_qty: f64,
+}
+
+/// 计划指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplanMetrics {
+    pub moved: usize,
+    pub qty_changed: usize,
+    pub retained: usize,
+    pub locked: usize,
+    pub overdue_recovered: usize,
+    /// 跨目标协同时的 Jain 公平指数
+    pub jain_index: Option<f64>,
+    /// 预计完成日期
+    pub predicted_finish: Option<String>,
+    /// 求解耗时（毫秒，用于性能观测）
+    pub elapsed_ms: u64,
+}
+
+/// 计划告警
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanWarning {
+    /// overflow_tail | capacity_tight | cycle_detected | iteration_capped | low_fairness
+    pub kind: String,
+    pub message: String,
+    pub task_ids: Vec<String>,
+}
+
+/// 提交结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplanApplyResult {
+    pub event_id: String,
+    pub goal_id: String,
+    pub moved: usize,
+    pub qty_changed: usize,
+    pub retained: usize,
+    /// 受影响目标 ID（供前端局部刷新进度链）
+    pub affected_goal_ids: Vec<String>,
+    pub tasks: Vec<Task>,
+}
+
+/// 重新规划事件（replan_events 行映射，时间线分页）
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ReplanEvent {
+    pub id: Option<String>,
+    pub goal_id: Option<String>,
+    pub trigger_type: Option<String>,
+    pub trigger_source: Option<String>,
+    pub severity: Option<String>,
+    pub status: Option<String>,
+    pub plan_hash: Option<String>,
+    pub snapshot_hash: Option<String>,
+    pub before_summary: Option<String>,
+    pub after_summary: Option<String>,
+    pub metrics: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: Option<String>,
+    pub applied_at: Option<String>,
+}
+
+/// 重新规划事件差异（replan_event_diffs 行映射）
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ReplanEventDiff {
+    pub id: Option<String>,
+    pub event_id: Option<String>,
+    pub task_id: Option<String>,
+    pub change_type: Option<String>,
+    pub old_plan_date: Option<String>,
+    pub new_plan_date: Option<String>,
+    pub old_plan_qty: Option<f64>,
+    pub new_plan_qty: Option<f64>,
+    pub old_unit: Option<String>,
+    pub new_unit: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// 事件详情（时间线展开）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplanEventDetail {
+    pub event: ReplanEvent,
+    pub diffs: Vec<ReplanEventDiff>,
 }
