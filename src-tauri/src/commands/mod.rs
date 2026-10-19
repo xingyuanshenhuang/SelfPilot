@@ -37,6 +37,8 @@ pub fn build_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send
         replan::replan_revert,
         replan::replan_list_events,
         replan::replan_event_detail,
+        replan::replan_record_feedback,
+        replan::replan_check_triggers,
         goal::replan_preview,
         goal::replan_goal,
         goal::move_goal,

@@ -50,7 +50,8 @@ pub async fn apply(pool: &SqlitePool, req: &ReplanApplyInput) -> AppResult<Repla
     let solve_req = ReplanSolveInput {
         goal_id: req.goal_id.clone(),
         scope: req.scope.clone(),
-        goal_ids: None,
+        // coordinate 必须透传 goal_ids，否则重解目标集/plan_hash 必然不一致
+        goal_ids: req.goal_ids.clone(),
         dry_run: true,
         overrides: merged_overrides,
         expected_plan_hash: None,

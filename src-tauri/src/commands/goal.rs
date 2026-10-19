@@ -11,6 +11,9 @@ use crate::db::DbPool;
 use crate::db::helpers;
 use crate::error::{AppError, AppResult};
 use crate::sanitize::normalize_description;
+use crate::services::replan::trigger::{
+    spawn_dispatch, TriggerEvent, EV_GOAL_DEADLINE_CHANGED, EV_GOAL_TOTAL_CHANGED,
+};
 use crate::services::{dependency_service, progress_service, split_service};
 use validator::Validate;
 
@@ -179,6 +182,31 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     // S-05 (SEC-M-05)：入参校验
     input.validate()?;
 
+    // 触发钩子（阶段 4 §4.13）所需旧值：deadline 变动 ≥1 天 / total_qty 变动
+    let old_goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+        .bind(&input.id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| helpers::not_found("目标", &input.id))?;
+    let deadline_changed = match (&old_goal.deadline, &input.deadline) {
+        (Some(a), Some(b)) => match (
+            chrono::NaiveDate::parse_from_str(a, "%Y-%m-%d"),
+            chrono::NaiveDate::parse_from_str(b, "%Y-%m-%d"),
+        ) {
+            (Ok(da), Ok(db)) => (da - db).num_days().abs() >= 1,
+            _ => a != b,
+        },
+        (None, Some(_)) => true,
+        (Some(_), None) => true,
+        (None, None) => false,
+    };
+    let total_changed = input
+        .total_qty
+        .map(|t| (t - old_goal.total_qty).abs() > 1e-9)
+        .unwrap_or(false);
+    let hook_goal_id = old_goal.id.clone();
+    let hook_goal_name = old_goal.name.clone();
+
     let mut updates: Vec<String> = Vec::new();
     if input.name.is_some() {
         updates.push("name = ?".to_string());
@@ -228,6 +256,28 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
     }
     q = q.bind(&input.id);
     q.execute(&state.0).await?;
+
+    // 触发钩子（阶段 4 §4.13，fire-and-forget）：deadline/total 变动
+    if deadline_changed {
+        spawn_dispatch(
+            state.0.clone(),
+            TriggerEvent::new(
+                hook_goal_id.clone(),
+                EV_GOAL_DEADLINE_CHANGED,
+                format!("目标「{}」截止日期已调整", hook_goal_name),
+            ),
+        );
+    }
+    if total_changed {
+        spawn_dispatch(
+            state.0.clone(),
+            TriggerEvent::new(
+                hook_goal_id,
+                EV_GOAL_TOTAL_CHANGED,
+                format!("目标「{}」总量已调整", hook_goal_name),
+            ),
+        );
+    }
 
     let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
         .bind(&input.id)

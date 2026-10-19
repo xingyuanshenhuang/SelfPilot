@@ -13,10 +13,19 @@
 //! - 锁定任务（schedule_locked 非空且 respect_locks 生效）与手动任务
 //!   （is_manual=1）不参与重新分配，new = old（change_type=locked/retained）；
 //! - 不可行时不抛错：仍返回携带 feasibility.options 与 warning 的完整计划。
+//!
+//! 阶段 4 扩展（整合设计 §4.6/§4.12/§4.13）：
+//! - [`learning`]：画像学习（EWMA 容量修正 / 反馈留痕，命令 replan_record_feedback）；
+//! - [`trigger`]：触发网关（五层闸门 / check_triggers / 事件投递，命令
+//!   replan_check_triggers，供前端轮询与命令钩子投递）。
 
 pub mod apply;
 pub mod explain;
+pub mod learning;
 pub mod planner;
+pub mod trigger;
 
 pub use apply::{apply, revert};
+pub use learning::record_feedback;
 pub use planner::solve;
+pub use trigger::check_triggers;

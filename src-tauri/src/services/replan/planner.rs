@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use chrono::{Datelike, Duration, NaiveDate};
 use serde_json::json;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use validator::Validate;
 
 use crate::db::models::{
@@ -26,6 +26,7 @@ use crate::error::{AppError, AppResult};
 use crate::services::planner::feasibility::longest_chain_length;
 use crate::services::planner::snapshot::{load_snapshot, HorizonSpan, PlanSnapshot};
 use crate::services::replan::explain;
+use crate::services::replan::learning::{apply_profile, load_planning_profile, PlanningProfile};
 use crate::services::split_planner::sha256_hex;
 use crate::util::parse_date_or_param;
 
@@ -38,6 +39,60 @@ const DEFAULT_WINDOW_DAYS: i64 = 30;
 /// 容量视为耗尽的浮点噪声阈值
 const CAP_EPS: f64 = 1e-9;
 
+/// 协同候选默认聚类窗口（deadline 90 天内，§4.12.3 选项 B）
+const COORDINATE_DEFAULT_DAYS: i64 = 90;
+/// A5 迭代再平衡上限（§4.12 阶段四）
+const COORDINATE_MAX_ROUNDS: usize = 5;
+
+/// 协同目标上下文（A5 阶段一产物）
+struct CoordinateCtx {
+    goal_id: String,
+    goal: Goal,
+    policy: GoalPolicy,
+    snapshot: PlanSnapshot,
+    /// 该目标视界结束日
+    end: NaiveDate,
+    /// 剩余工作量 W = Σ max(0, plan_qty − actual_qty)
+    workload: f64,
+    /// 目标优先级 Pri（goals.priority）
+    priority: f64,
+    /// 每日配额（阶段二分摊产物，(date, quota)）
+    quota: HashMap<NaiveDate, f64>,
+    /// 阶段三求解产物
+    plan: Option<ReplanPlan>,
+}
+
+/// 单目标单日容量口径（与 solve_inner 的 A1 简化版完全一致，
+/// 供 A5 阶段二全局额度分摊与内部求解共用，保证口径统一）
+fn own_day_cap(
+    date: NaiveDate,
+    profile: &PlanningProfile,
+    policy: &GoalPolicy,
+    base_capacity: Option<f64>,
+    intensity: f64,
+) -> f64 {
+    let weekday = date.weekday().num_days_from_sunday() as u8;
+    if policy.rest_days.contains(&weekday) {
+        return 0.0;
+    }
+    let base = base_capacity
+        .or_else(|| profile.weekday_hours.get(&weekday).copied())
+        .unwrap_or(1.0);
+    // B 组偏好基线（weekday_hours × weekend_factor × 强度）
+    let raw = base * profile.weekend_factor * intensity;
+    // A 组学习修正（阶段 4 §4.6.5）：corr × weekday_capacity[wd]；
+    // 冷启动（samples=0）时静默返回 base，行为与阶段 3 一致
+    let raw = apply_profile(raw, date, profile, 1.0);
+    let mut cap = raw;
+    if let Some(m) = policy.max_daily_hours {
+        cap = cap.min(m);
+    }
+    if let Some(m) = policy.max_daily_tasks {
+        cap = cap.min(m);
+    }
+    cap
+}
+
 /// 单日预算（A1 简化版产物）
 #[derive(Debug, Clone)]
 struct DayBudget {
@@ -48,15 +103,6 @@ struct DayBudget {
     cap: f64,
     /// 扣外部负载与锁定任务占位后的可分配额度
     available: f64,
-}
-
-/// 习惯画像（planning_profile settings JSON 解析结果）
-#[derive(Debug, Clone, Default)]
-pub struct HabitProfile {
-    /// 各星期容量（0=周日 … 6=周六；缺省 1.0）
-    weekday_hours: HashMap<u8, f64>,
-    /// 周末容量系数（缺省 1.0）
-    weekend_factor: f64,
 }
 
 /// 目标级规划策略（goal_planning_policy 行，未设置时全缺省）
@@ -94,34 +140,6 @@ fn resolve_end(req: &ReplanSolveInput, root_goal: &Goal, today: NaiveDate) -> Ap
         },
     };
     Ok(end.max(tomorrow))
-}
-
-/// 读取习惯画像（settings.planning_profile）
-async fn load_habit_profile(pool: &SqlitePool) -> AppResult<HabitProfile> {
-    let row: Option<String> =
-        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'planning_profile'")
-            .fetch_optional(pool)
-            .await?;
-    let mut profile = HabitProfile::default();
-    profile.weekend_factor = 1.0;
-    let Some(raw) = row else {
-        return Ok(profile);
-    };
-    let parsed: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|_| AppError::Internal("规划画像 JSON 解析失败".into()))?;
-    if let Some(weekday_hours) = parsed.get("weekday_hours").and_then(|v| v.as_object()) {
-        for (k, v) in weekday_hours.iter() {
-            if let (Ok(w), Some(f)) = (k.parse::<u8>(), v.as_f64()) {
-                profile.weekday_hours.insert(w, f);
-            }
-        }
-    }
-    if let Some(f) = parsed.get("weekend_factor").and_then(|v| v.as_f64()) {
-        if f.is_finite() && f >= 0.0 {
-            profile.weekend_factor = f;
-        }
-    }
-    Ok(profile)
 }
 
 /// 读取目标级策略（goal_planning_policy；未设置行时全缺省）
@@ -247,8 +265,11 @@ fn topo_order(
 pub fn solve_inner(
     snapshot: &PlanSnapshot,
     req: &ReplanSolveInput,
-    profile: &HabitProfile,
+    profile: &PlanningProfile,
     policy: &GoalPolicy,
+    // 跨目标协同注入的每日配额（A5 阶段二产物）：对该目标单日可分配
+    // 额度施加上限；None（单目标）时不限制。
+    daily_quota: Option<&HashMap<NaiveDate, f64>>,
 ) -> AppResult<ReplanPlan> {
     let today = snapshot.today;
     let tomorrow = today + Duration::days(1);
@@ -360,17 +381,8 @@ pub fn solve_inner(
     while date <= horizon_end {
         let weekday = date.weekday().num_days_from_sunday() as u8;
         if !policy.rest_days.contains(&weekday) {
-            let base = base_capacity
-                .or_else(|| profile.weekday_hours.get(&weekday).copied())
-                .unwrap_or(1.0);
-            let raw = base * profile.weekend_factor * intensity;
-            let mut cap = raw;
-            if let Some(m) = policy.max_daily_hours {
-                cap = cap.min(m);
-            }
-            if let Some(m) = policy.max_daily_tasks {
-                cap = cap.min(m);
-            }
+            // 单日容量（own_day_cap 与 A5 阶段二分摊共用同一口径）
+            let cap = own_day_cap(date, profile, policy, base_capacity, intensity);
             let date_str = date.format("%Y-%m-%d").to_string();
             let ext = snapshot.external_load.get(&date).copied().unwrap_or(0.0);
             let locked_cost: f64 = tasks
@@ -379,10 +391,14 @@ pub fn solve_inner(
                 .filter(|t| t.plan_date.as_deref() == Some(date_str.as_str()))
                 .map(|t| cost_of(t, units, allocable_of(t)))
                 .sum();
+            // 协同配额上限：min(自身可用额, 分摊额度)；单目标（None）不限
+            let quota_cap = daily_quota
+                .and_then(|q| q.get(&date).copied())
+                .unwrap_or(f64::INFINITY);
             budgets.push(DayBudget {
                 date,
                 cap,
-                available: (cap - ext - locked_cost).max(0.0),
+                available: (cap - ext - locked_cost).max(0.0).min(quota_cap),
             });
         }
         date += Duration::days(1);
@@ -755,32 +771,17 @@ pub fn solve_inner(
         });
     }
 
-    // ---------- 10. plan_hash（确定性：按 task_id 排序） ----------
-    let mut sorted: Vec<&TaskPlacement> = placements.iter().collect();
-    sorted.sort_by(|a, b| a.task_id.cmp(&b.task_id));
-    let mut canonical = format!(
-        "replan|v1|{}|{}|{:.6}|{:.6}|{}|{}|{}",
-        req.goal_id,
-        req.scope,
+    // ---------- 10. plan_hash（确定性：按 task_id 排序；coordinate 附加 goal_ids） ----------
+    let plan_hash = build_plan_hash(
+        &req.goal_id,
+        &req.scope,
+        req.goal_ids.as_deref(),
         workload,
         capacity,
-        horizon_start.format("%Y-%m-%d"),
-        horizon_end.format("%Y-%m-%d"),
-        sorted.len()
+        horizon_start,
+        horizon_end,
+        &placements,
     );
-    for p in sorted {
-        canonical.push_str(&format!(
-            "|{};{};{};{:.6};{:.6};{};{}",
-            p.task_id,
-            p.old_plan_date.as_deref().unwrap_or(""),
-            p.new_plan_date.as_deref().unwrap_or(""),
-            p.old_plan_qty,
-            p.new_plan_qty,
-            p.change_type,
-            p.reason
-        ));
-    }
-    let plan_hash = format!("sha256:{}", sha256_hex(canonical.as_bytes()));
 
     Ok(ReplanPlan {
         goal_id: req.goal_id.clone(),
@@ -820,6 +821,11 @@ pub async fn solve(pool: &SqlitePool, req: &ReplanSolveInput) -> AppResult<Repla
     // S-05：入参校验（命令层已校验，此处防御性复验）
     req.validate()?;
 
+    // 跨目标协同（A5）：目标集分摊 + 各目标内部求解 + 迭代再平衡
+    if req.scope == "coordinate" {
+        return solve_coordinate(pool, req).await;
+    }
+
     let today = chrono::Local::now().date_naive();
     // 目标存在性（E-NOTFOUND）与 deadline 解析
     let root_goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
@@ -831,13 +837,566 @@ pub async fn solve(pool: &SqlitePool, req: &ReplanSolveInput) -> AppResult<Repla
     let start = today + Duration::days(1);
 
     let snapshot = load_snapshot(pool, &req.goal_id, &HorizonSpan { start, end }).await?;
-    let profile = load_habit_profile(pool).await?;
+    let profile = load_planning_profile(pool).await?;
     let policy = load_goal_policy(pool, &req.goal_id).await?;
 
     let started = std::time::Instant::now();
-    let mut plan = solve_inner(&snapshot, req, &profile, &policy)?;
+    let mut plan = solve_inner(&snapshot, req, &profile, &policy, None)?;
     plan.metrics.elapsed_ms = started.elapsed().as_millis() as u64;
     Ok(plan)
+}
+
+// ============================================================
+// 跨目标协同（A5，§4.12）
+// ============================================================
+
+/// 确定性 plan_hash：scope=coordinate 时前缀附加按序 goal_ids 摘要
+/// （保证 apply 以相同 goal_ids 重解时 hash 一致）。
+/// 条目按 task_id 排序，逐项含 old/new 日期与数量、变更类型与理由。
+fn build_plan_hash(
+    goal_id: &str,
+    scope: &str,
+    goal_ids: Option<&[String]>,
+    workload: f64,
+    capacity: f64,
+    start: NaiveDate,
+    end: NaiveDate,
+    placements: &[TaskPlacement],
+) -> String {
+    let mut sorted: Vec<&TaskPlacement> = placements.iter().collect();
+    sorted.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+    let mut canonical = if scope == "coordinate" {
+        let mut ids: Vec<String> = goal_ids.unwrap_or_default().to_vec();
+        ids.sort();
+        format!(
+            "replan|v1|{}|coordinate|{}|{:.6}|{:.6}|{}|{}|{}",
+            goal_id,
+            ids.join(","),
+            workload,
+            capacity,
+            start.format("%Y-%m-%d"),
+            end.format("%Y-%m-%d"),
+            sorted.len()
+        )
+    } else {
+        format!(
+            "replan|v1|{}|{}|{:.6}|{:.6}|{}|{}|{}",
+            goal_id,
+            scope,
+            workload,
+            capacity,
+            start.format("%Y-%m-%d"),
+            end.format("%Y-%m-%d"),
+            sorted.len()
+        )
+    };
+    for p in sorted {
+        canonical.push_str(&format!(
+            "|{};{};{};{:.6};{:.6};{};{}",
+            p.task_id,
+            p.old_plan_date.as_deref().unwrap_or(""),
+            p.new_plan_date.as_deref().unwrap_or(""),
+            p.old_plan_qty,
+            p.new_plan_qty,
+            p.change_type,
+            p.reason
+        ));
+    }
+    format!("sha256:{}", sha256_hex(canonical.as_bytes()))
+}
+
+/// 协同目标集合（§4.12.3）：`goal_ids` 显式传入则按其精确集合（去重排序）；
+/// 空/None 时按 deadline 90 天内聚类（选项 B 默认行为），并恒含主目标。
+async fn resolve_coordinate_goals(
+    pool: &SqlitePool,
+    req: &ReplanSolveInput,
+    today: NaiveDate,
+) -> AppResult<Vec<String>> {
+    let mut ids: Vec<String> = match &req.goal_ids {
+        Some(list) if !list.is_empty() => list.clone(),
+        _ => {
+            let cutoff = today + Duration::days(COORDINATE_DEFAULT_DAYS);
+            let goals: Vec<Goal> =
+                sqlx::query_as("SELECT * FROM goals").fetch_all(pool).await?;
+            let mut clustered: Vec<String> = goals
+                .into_iter()
+                .filter(|g| {
+                    g.id != req.goal_id
+                        && g.deadline.as_deref().is_some_and(|ds| {
+                            NaiveDate::parse_from_str(ds, "%Y-%m-%d")
+                                .map(|d| d <= cutoff)
+                                .unwrap_or(false)
+                        })
+                })
+                .map(|g| g.id)
+                .collect();
+            if !clustered.contains(&req.goal_id) {
+                clustered.push(req.goal_id.clone());
+            }
+            clustered
+        }
+    };
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// 重算外部负载（协同口径）：排除协同目标集合（含其子树）后，其余目标的
+/// 任务按日聚合。协同集合内各目标共享全局额度，彼此不视为外部负载。
+async fn compute_external_excluding(
+    pool: &SqlitePool,
+    coord_paths: &[String],
+    start: NaiveDate,
+    end: NaiveDate,
+) -> AppResult<HashMap<NaiveDate, f64>> {
+    // 1. 协同集合的完整目标 id 集（自身 + 子树）
+    let all: Vec<(String, String)> = sqlx::query_as("SELECT id, path FROM goals")
+        .fetch_all(pool)
+        .await?;
+    let mut excl: Vec<String> = all
+        .into_iter()
+        .filter(|(_, path)| {
+            coord_paths.iter().any(|p| {
+                path == p || path.starts_with(&format!("{}/", p))
+            })
+        })
+        .map(|(id, _)| id)
+        .collect();
+    excl.sort();
+    excl.dedup();
+    let mut ext: HashMap<NaiveDate, f64> = HashMap::new();
+    if excl.is_empty() {
+        return Ok(ext);
+    }
+    // 2. 其余目标任务按日聚合（口径与 snapshot.rs 一致：排除 skipped）
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+        "SELECT plan_date, CAST(COALESCE(SUM(plan_qty),0) AS REAL) AS total_qty
+         FROM tasks WHERE plan_date IS NOT NULL",
+    );
+    qb.push(" AND plan_date >= ");
+    qb.push_bind(start.format("%Y-%m-%d").to_string());
+    qb.push(" AND plan_date <= ");
+    qb.push_bind(end.format("%Y-%m-%d").to_string());
+    qb.push(" AND status != 'skipped' AND goal_id NOT IN (");
+    let mut sep = qb.separated(", ");
+    for id in &excl {
+        sep.push_bind(id);
+    }
+    sep.push_unseparated(") GROUP BY plan_date");
+    let rows: Vec<(Option<String>, f64)> = qb.build_query_as().fetch_all(pool).await?;
+    for (date_str, total_qty) in rows {
+        if let Some(ds) = date_str {
+            if let Ok(d) = NaiveDate::parse_from_str(&ds, "%Y-%m-%d") {
+                ext.insert(d, total_qty);
+            }
+        }
+    }
+    Ok(ext)
+}
+
+/// 从配额 map 按比例让渡 `total_reduce`（供 A5 阶段四 donor 扣减）
+fn reduce_quota(quota: &mut HashMap<NaiveDate, f64>, total_reduce: f64) {
+    let sum: f64 = quota.values().sum();
+    if sum <= CAP_EPS {
+        return;
+    }
+    let scale = ((sum - total_reduce) / sum).max(0.0);
+    for v in quota.values_mut() {
+        *v *= scale;
+    }
+}
+
+/// 向配额 map 按比例增补 `total_add`（供 A5 阶段四 shortfall 目标增额）；
+/// 空 map 时按视界日期均摊。
+fn augment_quota(quota: &mut HashMap<NaiveDate, f64>, total_add: f64, dates: &[NaiveDate]) {
+    if dates.is_empty() {
+        return;
+    }
+    if quota.is_empty() {
+        let per = total_add / dates.len() as f64;
+        for d in dates {
+            *quota.entry(*d).or_insert(0.0) += per;
+        }
+    } else {
+        let per = total_add / quota.len() as f64;
+        for v in quota.values_mut() {
+            *v += per;
+        }
+    }
+}
+
+/// Jain 公平指数（§4.12.1）：J = (Σx)² / (n·Σx²)，x_i = 已分配_i / 需求_i。
+/// 需求为零的目标按 1.0 计（已满足不惩罚）。
+fn jain_index(allocated: &[f64], demands: &[f64]) -> f64 {
+    let n = allocated.len();
+    if n < 2 {
+        return 1.0;
+    }
+    let xs: Vec<f64> = allocated
+        .iter()
+        .zip(demands)
+        .map(|(a, d)| {
+            if *d <= CAP_EPS {
+                1.0
+            } else {
+                a / d
+            }
+        })
+        .collect();
+    let sum: f64 = xs.iter().sum();
+    let sq: f64 = xs.iter().map(|x| x * x).sum();
+    if sq <= CAP_EPS {
+        return 1.0;
+    }
+    (sum * sum) / (n as f64 * sq)
+}
+
+/// 跨目标协同求解（A5，§4.12）：永不落库。
+///
+/// 阶段一 计算各目标 W / Pri；阶段二 最大最小公平 + 轮转分摊全局每日额度
+/// （全局额度 = Σ 目标单日容量，口径与 [`own_day_cap`] 一致）；阶段三 注入
+/// per-goal quota 复用 [`solve_inner`]；阶段四 迭代再平衡 ≤5 轮，不收敛记
+/// `low_fairness` warning。返回合并后的单一 [`ReplanPlan`]（placements/day_load
+/// 为全局合并，plan_hash 附加按序 goal_ids 摘要）。
+pub async fn solve_coordinate(pool: &SqlitePool, req: &ReplanSolveInput) -> AppResult<ReplanPlan> {
+    let started = std::time::Instant::now();
+    let today = chrono::Local::now().date_naive();
+    let profile = load_planning_profile(pool).await?;
+
+    // ---------- 1. 目标集合（§4.12.3） ----------
+    let ids = resolve_coordinate_goals(pool, req, today).await?;
+
+    // ---------- 2. 装配各目标上下文（阶段一：W / Pri） ----------
+    let overrides = req.overrides.clone();
+    let override_capacity = overrides.as_ref().and_then(|o| o.daily_capacity);
+    let override_intensity = overrides.as_ref().and_then(|o| o.intensity);
+    let mut ctxs: Vec<CoordinateCtx> = Vec::new();
+    for gid in &ids {
+        let goal: Goal = sqlx::query_as("SELECT * FROM goals WHERE id = ?")
+            .bind(gid)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("目标不存在".into()))?;
+        let end = resolve_end(req, &goal, today)?;
+        let start = today + Duration::days(1);
+        let snapshot = load_snapshot(pool, gid, &HorizonSpan { start, end }).await?;
+        let workload: f64 = snapshot
+            .active_tasks
+            .iter()
+            .map(|t| (t.plan_qty - t.actual_qty).max(0.0))
+            .sum();
+        let policy = load_goal_policy(pool, gid).await?;
+        ctxs.push(CoordinateCtx {
+            goal_id: gid.clone(),
+            goal,
+            policy,
+            snapshot,
+            end,
+            workload,
+            priority: 1.0,
+            quota: HashMap::new(),
+            plan: None,
+        });
+    }
+    ctxs.retain(|c| c.workload > 0.0);
+    if ctxs.is_empty() {
+        return Err(AppError::Business("协同目标集中没有剩余工作量".into()));
+    }
+    // 各目标优先级（goals.priority，缺省 1.0）
+    for c in &mut ctxs {
+        c.priority = c.goal.priority.max(0.01);
+    }
+
+    // 协同集合内目标不互为外部负载：重算排除 S（含子树）后的外部负载，
+    // 覆盖各快照原始 external_load（其会把协同目标误计为外部负载）。
+    let coord_paths: Vec<String> = ctxs.iter().map(|c| c.goal.path.clone()).collect();
+    let ext_start = today + Duration::days(1);
+    let ext_end = ctxs.iter().map(|c| c.end).max().unwrap_or(ext_start);
+    let ext_map = compute_external_excluding(pool, &coord_paths, ext_start, ext_end).await?;
+    for c in &mut ctxs {
+        c.snapshot.external_load = ext_map.clone();
+    }
+
+    // ---------- 3. 全局额度分摊（阶段二：最大最小公平 + 轮转） ----------
+    let horizon_start = today + Duration::days(1);
+    let horizon_end = ctxs.iter().map(|c| c.end).max().unwrap_or(horizon_start);
+    // 需求序：按 W/Pri 降序（轮转基准序，平局按 goal_id）
+    ctxs.sort_by(|a, b| {
+        let ka = a.workload / a.priority;
+        let kb = b.workload / b.priority;
+        kb.partial_cmp(&ka)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.goal_id.cmp(&b.goal_id))
+    });
+    let mut date = horizon_start;
+    while date <= horizon_end {
+        let global_cap: f64 = ctxs
+            .iter()
+            .map(|c| {
+                own_day_cap(
+                    date,
+                    &profile,
+                    &c.policy,
+                    override_capacity.or(c.goal.daily_capacity),
+                    override_intensity.unwrap_or(c.policy.intensity),
+                )
+            })
+            .sum();
+        let mut remaining = global_cap;
+        let n = ctxs.len();
+        let mut idx = 0usize;
+        while remaining > CAP_EPS {
+            let mut progress = false;
+            for _ in 0..n {
+                let c = &mut ctxs[idx % n];
+                idx += 1;
+                let own = own_day_cap(
+                    date,
+                    &profile,
+                    &c.policy,
+                    override_capacity.or(c.goal.daily_capacity),
+                    override_intensity.unwrap_or(c.policy.intensity),
+                );
+                let already = c.quota.get(&date).copied().unwrap_or(0.0);
+                let headroom = (own - already).max(0.0);
+                if headroom <= CAP_EPS {
+                    continue;
+                }
+                let take = remaining.min(headroom);
+                *c.quota.entry(date).or_insert(0.0) += take;
+                remaining -= take;
+                progress = true;
+                if remaining <= CAP_EPS {
+                    break;
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        date += Duration::days(1);
+    }
+
+    // ---------- 4/5. 各目标内部求解 + 迭代再平衡（阶段三/四，≤5 轮） ----------
+    let all_ids: Vec<String> = ctxs.iter().map(|c| c.goal_id.clone()).collect();
+    let mut low_fairness = false;
+    for _round in 0..=COORDINATE_MAX_ROUNDS {
+        let mut shortfall: HashMap<String, f64> = HashMap::new();
+        let mut slack_qty: HashMap<String, f64> = HashMap::new();
+        for c in &mut ctxs {
+            let per_req = ReplanSolveInput {
+                goal_id: c.goal_id.clone(),
+                scope: "coordinate".to_string(),
+                goal_ids: Some(all_ids.clone()),
+                dry_run: true,
+                overrides: overrides.clone(),
+                expected_plan_hash: None,
+            };
+            let plan = solve_inner(&c.snapshot, &per_req, &profile, &c.policy, Some(&c.quota))?;
+            let overflow_qty: f64 = plan
+                .placements
+                .iter()
+                .filter(|p| p.reason == "capacity_trim")
+                .map(|p| p.new_plan_qty)
+                .sum();
+            shortfall.insert(c.goal_id.clone(), overflow_qty);
+            slack_qty.insert(
+                c.goal_id.clone(),
+                (plan.feasibility.capacity - plan.feasibility.workload).max(0.0),
+            );
+            c.plan = Some(plan);
+        }
+        let total_shortfall: f64 = shortfall.values().sum();
+        if total_shortfall <= CAP_EPS {
+            break;
+        }
+        if _round == COORDINATE_MAX_ROUNDS {
+            low_fairness = true;
+            break;
+        }
+        let donors: Vec<&CoordinateCtx> = ctxs
+            .iter()
+            .filter(|c| slack_qty.get(&c.goal_id).copied().unwrap_or(0.0) > CAP_EPS)
+            .collect();
+        let total_slack: f64 = donors
+            .iter()
+            .map(|c| slack_qty.get(&c.goal_id).copied().unwrap_or(0.0))
+            .sum();
+        if donors.is_empty() || total_slack <= CAP_EPS {
+            low_fairness = true;
+            break;
+        }
+        let transfer = total_shortfall.min(total_slack);
+        // donor 按 slack 比例让渡
+        for c in &mut ctxs {
+            let s = slack_qty.get(&c.goal_id).copied().unwrap_or(0.0);
+            if s <= CAP_EPS {
+                continue;
+            }
+            let reduce_by = transfer * (s / total_slack);
+            reduce_quota(&mut c.quota, reduce_by);
+        }
+        // shortfall 目标按缺口比例增补
+        for c in &mut ctxs {
+            let sf = shortfall.get(&c.goal_id).copied().unwrap_or(0.0);
+            if sf <= CAP_EPS {
+                continue;
+            }
+            let add = transfer * (sf / total_shortfall);
+            let dates: Vec<NaiveDate> = {
+                let start_d = today + Duration::days(1);
+                let mut ds = Vec::new();
+                let mut d = start_d;
+                while d <= c.end {
+                    ds.push(d);
+                    d += Duration::days(1);
+                }
+                ds
+            };
+            augment_quota(&mut c.quota, add, &dates);
+        }
+    }
+
+    // ---------- 6. 合并（MultiGoalPlan → ReplanPlan） ----------
+    let mut placements: Vec<TaskPlacement> = Vec::new();
+    let mut warnings: Vec<PlanWarning> = Vec::new();
+    let mut moved = 0usize;
+    let mut qty_changed_total = 0usize;
+    let mut retained_total = 0usize;
+    let mut locked_total = 0usize;
+    let mut overdue_recovered = 0usize;
+    let mut workload_total = 0.0;
+    let mut capacity_total = 0.0;
+    let mut feasible = true;
+    let mut reason_shortfall = false;
+    let mut reason_chain = false;
+    let mut options: Vec<ReplanOption> = Vec::new();
+    let mut predicted_finish: Option<NaiveDate> = None;
+    // 全局 day_load（含各目标自身任务，外部负载已被整体纳入视界，不再重复加）
+    let mut day_map: BTreeMap<NaiveDate, (i64, f64, i64, f64)> = BTreeMap::new();
+    for c in &ctxs {
+        let p = c.plan.as_ref().ok_or_else(|| {
+            AppError::Internal(format!("协同目标 {} 未完成求解", c.goal_id))
+        })?;
+        placements.extend(p.placements.iter().cloned());
+        warnings.extend(p.warnings.iter().cloned());
+        moved += p.metrics.moved;
+        qty_changed_total += p.metrics.qty_changed;
+        retained_total += p.metrics.retained;
+        locked_total += p.metrics.locked;
+        overdue_recovered += p.metrics.overdue_recovered;
+        workload_total += p.feasibility.workload;
+        capacity_total += p.feasibility.capacity;
+        feasible &= p.feasibility.feasible;
+        if !p.feasibility.feasible {
+            match p.feasibility.reason.as_deref() {
+                Some("capacity_shortfall") => reason_shortfall = true,
+                _ => reason_chain = true,
+            }
+            if options.is_empty() {
+                options = p.feasibility.options.clone();
+            }
+        }
+        if let Some(nd) = &p.metrics.predicted_finish {
+            if let Ok(d) = NaiveDate::parse_from_str(nd, "%Y-%m-%d") {
+                predicted_finish = Some(predicted_finish.map_or(d, |m| m.max(d)));
+            }
+        }
+        for dl in &p.day_load {
+            if let Ok(d) = NaiveDate::parse_from_str(&dl.date, "%Y-%m-%d") {
+                let e = day_map.entry(d).or_insert((0, 0.0, 0, 0.0));
+                e.0 += dl.before_tasks;
+                e.1 += dl.before_qty;
+                e.2 += dl.after_tasks;
+                e.3 += dl.after_qty;
+            }
+        }
+    }
+    let day_load: Vec<DayLoadAfter> = day_map
+        .into_iter()
+        .map(|(d, (bt, bq, at, aq))| DayLoadAfter {
+            date: d.format("%Y-%m-%d").to_string(),
+            before_tasks: bt,
+            before_qty: bq,
+            after_tasks: at,
+            after_qty: aq,
+        })
+        .collect();
+    if low_fairness {
+        warnings.push(PlanWarning {
+            kind: "low_fairness".to_string(),
+            message: "跨目标协同迭代 5 轮仍未收敛，部分目标被挤压，建议手动调整".to_string(),
+            task_ids: vec![],
+        });
+    }
+    // 公平指数（Jain，§4.12.1）：x = 分摊额度 / 需求
+    let allocated: Vec<f64> = ctxs.iter().map(|c| c.quota.values().sum::<f64>()).collect();
+    let demands: Vec<f64> = ctxs.iter().map(|c| c.workload).collect();
+    let jain = jain_index(&allocated, &demands);
+
+    let slack_total = if capacity_total > 0.0 {
+        (capacity_total - workload_total) / capacity_total
+    } else {
+        0.0
+    };
+    let level = if slack_total < 0.05 {
+        "tight"
+    } else if slack_total < 0.25 {
+        "normal"
+    } else {
+        "relaxed"
+    };
+    let reason = if !feasible {
+        if reason_shortfall {
+            Some("capacity_shortfall")
+        } else if reason_chain {
+            Some("dependency_chain_too_long")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let plan_hash = build_plan_hash(
+        &req.goal_id,
+        "coordinate",
+        Some(&all_ids),
+        workload_total,
+        capacity_total,
+        horizon_start,
+        horizon_end,
+        &placements,
+    );
+
+    Ok(ReplanPlan {
+        goal_id: req.goal_id.clone(),
+        scope: "coordinate".to_string(),
+        feasibility: FeasibilityReport {
+            feasible,
+            workload: workload_total,
+            capacity: capacity_total,
+            slack: slack_total,
+            level: level.to_string(),
+            reason: reason.map(|s| s.to_string()),
+            options,
+        },
+        placements,
+        day_load,
+        warnings,
+        metrics: ReplanMetrics {
+            moved,
+            qty_changed: qty_changed_total,
+            retained: retained_total,
+            locked: locked_total,
+            overdue_recovered,
+            jain_index: Some(jain),
+            predicted_finish: predicted_finish.map(|d| d.format("%Y-%m-%d").to_string()),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        },
+        plan_hash,
+        trigger: None,
+    })
 }
 
 // ============================================================
@@ -923,13 +1482,10 @@ mod tests {
         }
     }
 
-    fn default_profile() -> HabitProfile {
-        // 注意：HabitProfile::default() 的 weekend_factor 为 0.0（f64 缺省），
-        // 会使单日容量归零；生产装配路径在 load_habit_profile 中显式置 1.0
-        HabitProfile {
-            weekday_hours: HashMap::new(),
-            weekend_factor: 1.0,
-        }
+    fn default_profile() -> PlanningProfile {
+        // PlanningProfile::default() 已含冷启动安全值（speed_factor=1.0、
+        // weekday_capacity 全 1.0、weekend_factor=1.0），容量修正静默
+        PlanningProfile::default()
     }
 
     fn default_policy() -> GoalPolicy {
@@ -970,6 +1526,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        let p = placement(&plan, "A");
         assert_eq!(p.new_plan_qty, 6.0);
@@ -990,6 +1547,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        let sum: f64 = plan.placements.iter().map(|p| p.new_plan_qty).sum();
         assert!((sum - 10.0).abs() < CONSERVATION_EPS);
@@ -1011,6 +1569,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        let p = placement(&plan, "A");
         assert_eq!(p.change_type, "locked");
@@ -1034,6 +1593,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        assert_eq!(placement(&plan, "A").new_plan_date.as_deref(), Some("2026-10-10"));
         let pb = placement(&plan, "B");
@@ -1053,6 +1613,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        let p = placement(&plan, "A");
         assert_eq!(p.reason, "overdue_pull");
@@ -1074,6 +1635,7 @@ mod tests {
             &default_req(),
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        assert!(!plan.feasibility.feasible);
         assert_eq!(plan.feasibility.reason.as_deref(), Some("capacity_shortfall"));
@@ -1095,14 +1657,119 @@ mod tests {
             &req,
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        let p2 = solve_inner(
             &snapshot,
             &req,
             &default_profile(),
             &default_policy(),
+            None,
         )
         .unwrap();        assert!(p1.plan_hash.starts_with("sha256:"));
         assert_eq!(p1.plan_hash, p2.plan_hash);
+    }
+
+    // ============================================================
+    // 跨目标协同（A5）合成用例：需临时库（加载全部迁移）
+    // ============================================================
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+
+    /// 临时库（应用全部迁移）
+    async fn setup_coord_db() -> SqlitePool {
+        let dir = std::env::temp_dir().join("selfpilot_test_coord");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("coord.db");
+        let _ = std::fs::remove_file(&db_path);
+        let opts = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    /// 插入目标 + `n_tasks` 个待办任务（每天 1 个，plan_qty=1）。
+    /// daily_capacity 置 None → Quantity 模式：单日容量 1.0，任务成本 = 数量。
+    async fn insert_coord_goal(
+        pool: &SqlitePool,
+        gid: &str,
+        days_to_deadline: i64,
+        n_tasks: i64,
+    ) {
+        let today = chrono::Local::now().date_naive();
+        let deadline = (today + Duration::days(days_to_deadline))
+            .format("%Y-%m-%d")
+            .to_string();
+        let path = format!("/{}", gid);
+        sqlx::query(
+            "INSERT INTO goals
+             (id, name, parent_id, path, deadline, total_qty, unit, sort_order,
+              created_at, priority, auto_replan, auto_apply, daily_capacity)
+             VALUES (?, ?, NULL, ?, ?, ?, '词', 0, '2026-01-01T00:00:00', 1.0, 1, 0, NULL)",
+        )
+        .bind(gid)
+        .bind("测试目标")
+        .bind(&path)
+        .bind(&deadline)
+        .bind(n_tasks as f64)
+        .execute(pool)
+        .await
+        .unwrap();
+        for i in 0..n_tasks {
+            let tid = format!("{}-t{}", gid, i + 1);
+            let tpath = format!("/{}/{}", gid, tid);
+            let plan = (today + Duration::days(i + 1))
+                .format("%Y-%m-%d")
+                .to_string();
+            sqlx::query(
+                "INSERT INTO tasks
+                 (id, goal_id, stage_id, parent_id, path, name, plan_date, plan_qty,
+                  actual_qty, unit, status, is_manual, source, sort_order, created_at)
+                 VALUES (?, ?, NULL, NULL, ?, '任务', ?, 1, 0, '词', 'pending', 0, 'auto', 0, '2026-01-01T00:00:00')",
+            )
+            .bind(&tid)
+            .bind(gid)
+            .bind(&tpath)
+            .bind(&plan)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_jain_fairness() {
+        // A5/DG-16：3 目标等需求等容量 → 配额均摊 x 相等，Jain=1 ≥ 0.85；
+        // 合并计划全部任务产出放置，plan_hash 确定可重解。
+        let pool = setup_coord_db().await;
+        for gid in ["g1", "g2", "g3"] {
+            insert_coord_goal(&pool, gid, 5, 5).await;
+        }
+        let req = ReplanSolveInput {
+            goal_id: "g1".into(),
+            scope: "coordinate".into(),
+            goal_ids: Some(vec!["g1".into(), "g2".into(), "g3".into()]),
+            dry_run: true,
+            overrides: None,
+            expected_plan_hash: None,
+        };
+        let plan = solve_coordinate(&pool, &req).await.unwrap();
+        assert_eq!(plan.scope, "coordinate");
+        assert!(plan.feasibility.feasible, "三目标等量应可行");
+        assert_eq!(plan.placements.len(), 15, "三目标 × 5 任务全部产出放置");
+        let jain = plan.metrics.jain_index.unwrap();
+        assert!(jain >= 0.85, "n=3 公平指数应 ≥ 0.85，实际 {jain}");
+        assert!(plan.plan_hash.starts_with("sha256:"));
+        // 确定性：同输入重解 hash 一致（apply 重解依赖）
+        let plan2 = solve_coordinate(&pool, &req).await.unwrap();
+        assert_eq!(plan.plan_hash, plan2.plan_hash);
     }
 }

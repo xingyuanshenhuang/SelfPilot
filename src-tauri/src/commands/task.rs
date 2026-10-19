@@ -111,6 +111,15 @@ pub async fn complete_task(
         "pending"
     };
 
+    // 触发钩子（阶段 4 §4.13）：本次使任务达成完成 → TaskCompleted 投递
+    // 注：本应用实际完成量上限为计划量（上方校验），故"完成 ≥ 计划 120%"
+    // 的设计条件映射为"任务达成 done（100% 完成）"，超额语义见设计 §4.13.1。
+    let hook_goal_id = task.goal_id.clone();
+    let hook_task_id = task.id.clone();
+    let hook_task_name = task.name.clone();
+    let hook_remaining = (task.plan_qty - task.actual_qty).max(0.0);
+    let is_completion = new_status == "done";
+
     sqlx::query("UPDATE tasks SET actual_qty = ?, status = ?, updated_at = ? WHERE id = ?")
         .bind(input.actual_qty)
         .bind(new_status)
@@ -118,6 +127,20 @@ pub async fn complete_task(
         .bind(&input.task_id)
         .execute(&state.0)
         .await?;
+
+    if is_completion {
+        let mut ev = crate::services::replan::trigger::TriggerEvent::new(
+            hook_goal_id,
+            crate::services::replan::trigger::EV_TASK_COMPLETED,
+            format!("任务「{}」已完成", hook_task_name),
+        );
+        ev.task_id = Some(hook_task_id);
+        crate::services::replan::trigger::spawn_dispatch_with_impact(
+            state.0.clone(),
+            ev,
+            hook_remaining,
+        );
+    }
 
     let updated: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&input.task_id)
@@ -138,11 +161,25 @@ pub async fn skip_task(task_id: String, state: State<'_, DbPool>) -> AppResult<T
         .await?
         .ok_or_else(|| helpers::not_found("任务", &task_id))?;
 
+    // 触发钩子（阶段 4 §4.13）：跳过 → TaskSkipped 投递（fire-and-forget）
+    let hook_goal_id = _task.goal_id.clone();
+    let hook_task_id = _task.id.clone();
+    let hook_task_name = _task.name.clone();
+    let hook_remaining = (_task.plan_qty - _task.actual_qty).max(0.0);
+
     sqlx::query("UPDATE tasks SET status = 'skipped', updated_at = ? WHERE id = ?")
         .bind(now_updated_at_ts())
         .bind(&task_id)
         .execute(&state.0)
         .await?;
+
+    let mut ev = crate::services::replan::trigger::TriggerEvent::new(
+        hook_goal_id,
+        crate::services::replan::trigger::EV_TASK_SKIPPED,
+        format!("任务「{}」已跳过", hook_task_name),
+    );
+    ev.task_id = Some(hook_task_id);
+    crate::services::replan::trigger::spawn_dispatch_with_impact(state.0.clone(), ev, hook_remaining);
 
     let updated: Task = sqlx::query_as("SELECT * FROM tasks WHERE id = ?")
         .bind(&task_id)

@@ -98,6 +98,27 @@ fn default_scope() -> String {
     "single".to_string()
 }
 
+/// 校验画像反馈信号类型（阶段4 §4.6，7 类）
+fn validate_feedback_signal(s: &str) -> Result<(), ValidationError> {
+    if [
+        "qty_change",
+        "date_change",
+        "delete",
+        "early_finish",
+        "late_finish",
+        "skip",
+        "plan_adopt",
+    ]
+    .contains(&s)
+    {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "信号类型必须为 qty_change/date_change/delete/early_finish/late_finish/skip/plan_adopt",
+        ))
+    }
+}
+
 /// 校验智能拆解策略
 fn validate_split_strategy(s: &str) -> Result<(), ValidationError> {
     if ["by_deadline", "by_capacity", "by_date_range"].contains(&s) {
@@ -1031,6 +1052,9 @@ pub struct ReplanApplyInput {
     /// 规划范围（须与预览一致，保证 hash 一致）
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// 协同规划时的目标 ID 列表（scope=coordinate 时透传，保证 apply 重解 hash 一致）
+    #[serde(default)]
+    pub goal_ids: Option<Vec<String>>,
     /// 预览时携带的事件 id（预览阶段已落 previewed 事件时回填）
     #[serde(default)]
     pub event_id: Option<String>,
@@ -1195,4 +1219,70 @@ pub struct ReplanEventDiff {
 pub struct ReplanEventDetail {
     pub event: ReplanEvent,
     pub diffs: Vec<ReplanEventDiff>,
+}
+
+// ============================================================
+// 智能规划（阶段 4）· 反馈学习与触发网关契约层
+// ============================================================
+
+/// 画像学习反馈输入（replan_record_feedback 入参）
+///
+/// 7 类信号（§4.6.1 表）：qty_change / date_change / delete /
+/// early_finish / late_finish / skip / plan_adopt。
+/// 写入 split_feedback 表并触发 planning_profile EWMA 更新。
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct FeedbackInput {
+    pub goal_id: String,
+    pub task_id: String,
+    /// 信号类型（见 validate_feedback_signal）
+    #[validate(custom(function = "validate_feedback_signal"))]
+    pub signal_type: String,
+    /// 原计划日期 yyyy-MM-dd
+    #[validate(custom(function = "validate_date_format"))]
+    pub plan_date: Option<String>,
+    /// 原计划量
+    #[validate(custom(function = "validate_qty"))]
+    pub planned_qty: Option<f64>,
+    /// 信号时实际量
+    #[validate(custom(function = "validate_qty"))]
+    pub actual_qty: Option<f64>,
+    /// 信号后最终量
+    #[validate(custom(function = "validate_qty"))]
+    pub final_qty: Option<f64>,
+    /// 日期偏移天数（信号后日期 − 原计划日期）
+    #[serde(default)]
+    pub date_shift: Option<i64>,
+    /// 采纳的拆解模式（smart_split 的 pattern 字段）
+    #[serde(default)]
+    pub chosen_pattern: Option<String>,
+}
+
+/// 触发网关 · 单目标评估结果（replan_check_triggers 返回项）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerGoalResult {
+    pub goal_id: String,
+    pub goal_name: String,
+    /// proceed | auto_apply | suppressed
+    pub decision: String,
+    /// 本次评估的触发类型（9 类之一）
+    pub trigger_type: String,
+    /// 严重度：info | warning | critical
+    pub severity: String,
+    /// 触发原因描述（人类可读）
+    pub reason: Option<String>,
+    /// 抑制原因（decision=suppressed 时）
+    pub suppress_reason: Option<String>,
+    /// 影响面 ratio（0~1）
+    pub impact_ratio: Option<f64>,
+    /// Proceed/AutoApply 时写入的 replan_events id（AutoApply 为 applied 事件）
+    pub event_id: Option<String>,
+}
+
+/// 触发网关 · 批量检查报告
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerReport {
+    /// 每个活跃目标的评估结果
+    pub goals: Vec<TriggerGoalResult>,
+    /// 产生 pending 事件的目标数
+    pub pending_count: usize,
 }
