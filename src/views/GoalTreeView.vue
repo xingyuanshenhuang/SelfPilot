@@ -27,6 +27,7 @@ import * as goalApi from "@/api/goal";
 import * as statsApi from "@/api/stats";
 import type {
   Goal,
+  GoalAutomationPolicy,
   GoalTreeNode,
   Task,
   CreateTaskInput,
@@ -50,6 +51,7 @@ import ReplanPreviewDrawer from "@/components/ReplanPreviewDrawer.vue";
 import ReplanEventTimeline from "@/components/ReplanEventTimeline.vue";
 import ReplanSuggestionBar from "@/components/ReplanSuggestionBar.vue";
 import ReplanTriggerSettings from "@/components/ReplanTriggerSettings.vue";
+import GoalAutomationSettings from "@/components/GoalAutomationSettings.vue";
 import { useReplanStore } from "@/stores/replanStore";
 
 const goalStore = useGoalStore();
@@ -1147,6 +1149,28 @@ function openReplanHistory(goal: Goal) {
   replanGoal.value = goal;
   showReplanHistory.value = true;
 }
+
+// ===== 目标级自动化规划设置（阶段 4C）=====
+const showGoalAutomation = ref(false);
+const automationGoal = ref<Goal | null>(null);
+
+function openGoalAutomationSettings(goal: Goal) {
+  automationGoal.value = goal;
+  showGoalAutomation.value = true;
+}
+
+/** 保存后同步本地目标节点（避免整树重拉） */
+function handleGoalAutomationSaved(policy: GoalAutomationPolicy) {
+  const goal = automationGoal.value;
+  if (!goal) return;
+  const updated: Goal = {
+    ...goal,
+    auto_replan: policy.auto_replan,
+    auto_apply: policy.auto_apply,
+  };
+  automationGoal.value = updated;
+  goalStore.updateGoalLocally(updated);
+}
 /** 应用/撤销后刷新目标树与进度 */
 async function handleReplanSuccess() {
   await goalStore.fetchGoalTree();
@@ -1367,6 +1391,7 @@ const treeApi: GoalTreeApi = {
   openSmartSplitModal,
   handleReplanPreview: openReplanDrawer,
   openReplanHistory,
+  openGoalAutomationSettings,
   handleDeleteGoal,
   buildTaskActions,
   handleTaskAction,
@@ -2055,5 +2080,12 @@ provide(goalTreeApiKey, treeApi);
 
     <!-- 触发设置（阶段 4） -->
     <ReplanTriggerSettings v-model:show="showTriggerSettings" />
+
+    <!-- 目标级自动化规划设置（阶段 4C） -->
+    <GoalAutomationSettings
+      v-model:show="showGoalAutomation"
+      :goal="automationGoal"
+      @saved="handleGoalAutomationSaved"
+    />
   </div>
 </template>

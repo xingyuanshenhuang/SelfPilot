@@ -67,6 +67,7 @@ watch(
   () => props.show,
   async (v) => {
     if (v && props.goal) {
+      acceptedRisk.value = false;
       deadlineTs.value = null;
       store.open(props.goal.id).catch((e) => message.error(toErrorMessage(e)));
     }
@@ -386,7 +387,7 @@ const warningBadge = computed<{ cls: string; text: string } | null>(() => {
 const applying = computed(() => store.applying);
 async function handleApply() {
   try {
-    const res = await store.commit();
+    const res = await store.commit(acceptedRisk.value);
     if (!res) return;
     message.success(
       `已应用重新规划：调整 ${res.moved + res.qty_changed} 项，保留 ${res.retained} 项`,
@@ -411,6 +412,13 @@ async function handleRevert() {
 
 // ===== 不可行弹窗 =====
 const acceptedRisk = ref(false);
+// 重新求解后重置接受风险状态，避免上一次的放行影响新计划
+watch(
+  () => store.plan,
+  (p) => {
+    if (p) acceptedRisk.value = false;
+  },
+);
 const showInfeasible = computed(
   () => !!store.plan && !store.plan.feasibility.feasible && !acceptedRisk.value,
 );

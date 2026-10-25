@@ -23,6 +23,8 @@ pub fn build_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send
         goal::list_goal_tree,
         goal::get_goal,
         goal::update_goal,
+        goal::get_goal_automation,
+        goal::update_goal_automation,
         goal::delete_goal,
         goal::auto_split,
         goal::split_by_capacity,

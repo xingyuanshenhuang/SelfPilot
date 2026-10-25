@@ -148,7 +148,9 @@ export const useReplanStore = defineStore("replan", () => {
   }
 
   /** 提交应用（plan_hash 与 overrides 必须与最近一次预览一致） */
-  async function commit(): Promise<ReplanApplyResult | null> {
+  async function commit(
+    acceptRisk = false,
+  ): Promise<ReplanApplyResult | null> {
     if (!goalId.value || !plan.value) return null;
     applying.value = true;
     try {
@@ -166,6 +168,7 @@ export const useReplanStore = defineStore("replan", () => {
           excludedTaskIds.value.length > 0
             ? [...excludedTaskIds.value]
             : undefined,
+        accept_risk: acceptRisk || undefined,
       });
       lastApply.value = result;
       plan.value = null;

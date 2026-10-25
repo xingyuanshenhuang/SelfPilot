@@ -15,6 +15,29 @@ export interface Goal {
   created_at: string;
   /** P1-3：每日可用时长（按时间预算拆解时使用，null=未设置） */
   daily_capacity: number | null;
+  /** 目标优先级权重（A5 跨目标公平分摊，默认 1.0） */
+  priority: number;
+  /** 是否允许系统事件自动触发重排（1=允许，0=关闭） */
+  auto_replan: number;
+  /** 是否允许无需确认直接应用（1=开启，0=关闭） */
+  auto_apply: number;
+  /** 风险标记：'at_risk' = 用户选择"接受风险"（null=无） */
+  risk_flag: string | null;
+}
+
+/** 目标级自动化规划开关（goals.auto_replan / auto_apply） */
+export interface GoalAutomationPolicy {
+  goal_id: string;
+  auto_replan: number;
+  auto_apply: number;
+}
+
+export interface UpdateGoalAutomationInput {
+  goal_id: string;
+  /** 不传=不修改 */
+  auto_replan?: number | null;
+  /** 不传=不修改 */
+  auto_apply?: number | null;
 }
 
 export interface CreateGoalInput {
@@ -909,6 +932,8 @@ export interface ReplanApplyInput {
   overrides?: ReplanOverrides;
   /** 逐任务排除（与 overrides.excluded_task_ids 合并） */
   excluded_task_ids?: string[];
+  /** 用户选择「接受风险」照常应用（落库后目标标记 at_risk） */
+  accept_risk?: boolean;
 }
 
 /** 单任务放置结果 */

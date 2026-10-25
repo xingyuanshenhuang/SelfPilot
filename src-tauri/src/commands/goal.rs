@@ -3,9 +3,9 @@ use tauri::State;
 use crate::util::{new_uuid, now_local_ts, now_updated_at_ts};
 
 use crate::db::models::{
-    CreateGoalInput, Goal, GoalTreeNode, MoveGoalInput, ProgressInfo, ReplanPreview, ReplanResult,
-    RepeatSeries, RepeatSeriesUpdateResult, RepeatSplitInput, SmartSplitInput, Task, UpdateGoalInput,
-    UpdateRepeatSeriesInput,
+    CreateGoalInput, Goal, GoalAutomationPolicy, GoalTreeNode, MoveGoalInput, ProgressInfo,
+    ReplanPreview, ReplanResult, RepeatSeries, RepeatSeriesUpdateResult, RepeatSplitInput,
+    SmartSplitInput, Task, UpdateGoalAutomationInput, UpdateGoalInput, UpdateRepeatSeriesInput,
 };
 use crate::db::DbPool;
 use crate::db::helpers;
@@ -284,6 +284,67 @@ pub async fn update_goal(input: UpdateGoalInput, state: State<'_, DbPool>) -> Ap
         .fetch_one(&state.0)
         .await?;
     Ok(goal)
+}
+
+/// 读取目标级自动化规划开关
+#[tauri::command]
+pub async fn get_goal_automation(
+    goal_id: String,
+    state: State<'_, DbPool>,
+) -> AppResult<GoalAutomationPolicy> {
+    let row: (i64, i64) = sqlx::query_as("SELECT auto_replan, auto_apply FROM goals WHERE id = ?")
+        .bind(&goal_id)
+        .fetch_optional(&state.0)
+        .await?
+        .ok_or_else(|| helpers::not_found("目标", &goal_id))?;
+    Ok(GoalAutomationPolicy {
+        goal_id,
+        auto_replan: row.0,
+        auto_apply: row.1,
+    })
+}
+
+/// 更新目标级自动化规划开关（仅传入字段生效）
+#[tauri::command]
+pub async fn update_goal_automation(
+    input: UpdateGoalAutomationInput,
+    state: State<'_, DbPool>,
+) -> AppResult<GoalAutomationPolicy> {
+    input.validate()?;
+
+    let mut updates: Vec<&str> = Vec::new();
+    if input.auto_replan.is_some() {
+        updates.push("auto_replan = ?");
+    }
+    if input.auto_apply.is_some() {
+        updates.push("auto_apply = ?");
+    }
+    if updates.is_empty() {
+        return Err(AppError::Param("未提供任何更新字段".into()));
+    }
+
+    let sql = format!("UPDATE goals SET {} WHERE id = ?", updates.join(", "));
+    let mut q = sqlx::query(&sql);
+    if let Some(v) = input.auto_replan {
+        q = q.bind(v);
+    }
+    if let Some(v) = input.auto_apply {
+        q = q.bind(v);
+    }
+    let result = q.bind(&input.goal_id).execute(&state.0).await?;
+    if result.rows_affected() == 0 {
+        return Err(helpers::not_found("目标", &input.goal_id));
+    }
+
+    let row: (i64, i64) = sqlx::query_as("SELECT auto_replan, auto_apply FROM goals WHERE id = ?")
+        .bind(&input.goal_id)
+        .fetch_one(&state.0)
+        .await?;
+    Ok(GoalAutomationPolicy {
+        goal_id: input.goal_id,
+        auto_replan: row.0,
+        auto_apply: row.1,
+    })
 }
 
 /// 删除目标（级联删除所有子目标和任务）

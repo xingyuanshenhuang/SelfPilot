@@ -6,11 +6,13 @@
 //!   （snapshot_hash 对比 `replan_trigger_state.last_snapshot_hash`）；
 //!   影响面 < `planning_min_impact_ratio` → Suppress；
 //!   事件 ∈ auto_apply_events 且 `goal.auto_apply=1` → AutoApply；否则 Proceed。
-//! - [`dispatch_event`]：命令钩子与 [`check_triggers`] 共用的投递入口：
+//! - [`dispatch_event`]：命令钩子等离散事件的投递入口：
 //!   Proceed 写 `replan_events(status='pending')`，AutoApply 直接求解+应用
 //!   （可行才自动应用，不可行降级 pending），Suppress 记 `suppressed_count+1`。
 //! - [`check_triggers`]：批量评估 deadline 90 天内活跃目标
 //!   （OverdueAccumulated / LoadOverload / PeriodicReview 三类）。
+//!   轮询抑制不落库（避免每次进入视图产生重复 suppressed 事件噪声）；
+//!   应用计划会刷新触发冷却，防止应用后立即再次建议。
 
 use std::collections::HashSet;
 
@@ -500,26 +502,51 @@ async fn write_suppressed_event(
 }
 
 /// 按闸门结果落库（Suppress / Proceed / AutoApply 三分支）
+///
+/// 用于命令钩子等离散事件：抑制时保留 suppressed 事件埋点（AC-10）。
 pub async fn settle_event(
     pool: &SqlitePool,
     event: &TriggerEvent,
     gate: &GateResult,
 ) -> AppResult<DispatchOutcome> {
+    settle_event_impl(pool, event, gate, true).await
+}
+
+/// 轮询巡检专用：抑制时不落库、不累计 suppressed_count。
+///
+/// `check_triggers` 会在每次进入目标树/手动刷新时被调用，若抑制也写事件，
+/// 会产生大量重复的 suppressed 噪声；轮询不是离散用户事件，抑制只返回原因即可。
+async fn settle_event_polling(
+    pool: &SqlitePool,
+    event: &TriggerEvent,
+    gate: &GateResult,
+) -> AppResult<DispatchOutcome> {
+    settle_event_impl(pool, event, gate, false).await
+}
+
+async fn settle_event_impl(
+    pool: &SqlitePool,
+    event: &TriggerEvent,
+    gate: &GateResult,
+    record_suppressed: bool,
+) -> AppResult<DispatchOutcome> {
     match &gate.decision {
         Decision::Suppress(reason) => {
-            // suppressed_count + 1（阈值不重置，冷却由 last_auto_replan_at 控制）
-            let mut state = load_trigger_state(pool, &event.goal_id)
-                .await?
-                .unwrap_or(TriggerState {
-                    last_snapshot_hash: None,
-                    last_auto_replan_at: None,
-                    suppressed_count: 0,
-                    updated_at: now_local_ts(),
-                });
-            state.suppressed_count += 1;
-            state.updated_at = now_local_ts();
-            save_trigger_state(pool, &event.goal_id, &state).await?;
-            write_suppressed_event(pool, event, reason).await?;
+            if record_suppressed {
+                // suppressed_count + 1（阈值不重置，冷却由 last_auto_replan_at 控制）
+                let mut state = load_trigger_state(pool, &event.goal_id)
+                    .await?
+                    .unwrap_or(TriggerState {
+                        last_snapshot_hash: None,
+                        last_auto_replan_at: None,
+                        suppressed_count: 0,
+                        updated_at: now_local_ts(),
+                    });
+                state.suppressed_count += 1;
+                state.updated_at = now_local_ts();
+                save_trigger_state(pool, &event.goal_id, &state).await?;
+                write_suppressed_event(pool, event, reason).await?;
+            }
             Ok(DispatchOutcome {
                 decision: "suppressed".into(),
                 event_id: None,
@@ -577,6 +604,7 @@ pub async fn settle_event(
                     event_id: None,
                     overrides: None,
                     excluded_task_ids: None,
+                    accept_risk: false,
                 };
                 let result = crate::services::replan::apply(pool, &apply_req).await?;
                 // apply 以 'manual' 落库 → 修正为系统触发来源
@@ -787,20 +815,24 @@ pub async fn check_triggers(pool: &SqlitePool) -> AppResult<TriggerReport> {
         if candidates.is_empty() {
             continue;
         }
-        // 按优先级取第一个非抑制决策；全部抑制时取最后一个（记录原因）
+        // 按优先级取第一个非抑制决策；全部抑制时取第一个（最高优先级，仅用于返回原因）
+        let mut first_suppressed: Option<(TriggerEvent, GateResult)> = None;
         let mut chosen: Option<(TriggerEvent, GateResult)> = None;
         for ev in &candidates {
             let gate = should_replan(pool, ev, &policy).await?;
-            if !matches!(gate.decision, Decision::Suppress(_)) {
-                chosen = Some((ev.clone(), gate));
-                break;
+            if matches!(gate.decision, Decision::Suppress(_)) {
+                if first_suppressed.is_none() {
+                    first_suppressed = Some((ev.clone(), gate));
+                }
+                continue;
             }
             chosen = Some((ev.clone(), gate));
+            break;
         }
-        let Some((ev, gate)) = chosen else {
+        let Some((ev, gate)) = chosen.or(first_suppressed) else {
             continue;
         };
-        let outcome = settle_event(pool, &ev, &gate).await?;
+        let outcome = settle_event_polling(pool, &ev, &gate).await?;
         let decision = outcome.decision.clone();
         if decision == "proceed" {
             pending_count += 1;
@@ -1058,6 +1090,183 @@ mod tests {
         let h2 = snapshot_hash(&snap);
         assert_eq!(h1, h2);
         assert!(h1.starts_with("sha256:"));
+    }
+
+    #[tokio::test]
+    async fn check_triggers_overdue_candidate_proceeds() {
+        let pool = setup_db().await;
+        insert_goal(&pool, "g1", 1, 0).await;
+        // 追加 3 个昨日到期的 pending 任务 → 达到默认 overdue_threshold=3
+        let yesterday = (Local::now().date_naive() - Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        for i in 0..3 {
+            let tid = format!("g1-od{}", i);
+            let path = format!("/g1/{}", tid);
+            sqlx::query(
+                "INSERT INTO tasks
+                 (id, goal_id, stage_id, parent_id, path, name, plan_date, plan_qty,
+                  actual_qty, unit, status, is_manual, source, sort_order, created_at)
+                 VALUES (?, 'g1', NULL, NULL, ?, '逾期任务', ?, 5, 0, '', 'pending', 0, 'auto', 0, '2026-01-01T00:00:00')",
+            )
+            .bind(&tid)
+            .bind(&path)
+            .bind(&yesterday)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let report = check_triggers(&pool).await.unwrap();
+        assert_eq!(report.pending_count, 1, "{:?}", report.goals);
+        let result = report
+            .goals
+            .iter()
+            .find(|g| g.goal_id == "g1")
+            .expect("g1 应出现在触发报告中");
+        assert_eq!(result.decision, "proceed");
+        assert_eq!(result.trigger_type, EV_OVERDUE_ACCUMULATED);
+
+        // pending 事件已落库，供前端建议条消费
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM replan_events
+             WHERE goal_id = 'g1' AND status = 'pending'
+               AND trigger_type = 'overdue_accumulated'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pending, 1);
+
+        // 再次轮询：同快照被幂等抑制，且不写入 suppressed 事件（噪声修复）
+        let report2 = check_triggers(&pool).await.unwrap();
+        assert_eq!(report2.pending_count, 0);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM replan_events WHERE goal_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(total, 1, "轮询抑制不应新增事件");
+    }
+
+    #[tokio::test]
+    async fn check_triggers_polling_suppression_writes_nothing() {
+        let pool = setup_db().await;
+        insert_goal(&pool, "g1", 0, 0).await; // auto_replan=0 → 每轮均抑制
+
+        let r1 = check_triggers(&pool).await.unwrap();
+        assert_eq!(r1.pending_count, 0);
+        let g1 = r1.goals.iter().find(|g| g.goal_id == "g1").unwrap();
+        assert_eq!(g1.decision, "suppressed");
+        assert!(
+            g1.suppress_reason
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("AutoReplanDisabled"),
+            "{:?}",
+            g1.suppress_reason
+        );
+
+        let r2 = check_triggers(&pool).await.unwrap();
+        assert_eq!(r2.pending_count, 0);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM replan_events WHERE goal_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(total, 0, "轮询抑制不应落库");
+        // 轮询也不累计 suppressed_count
+        let count: Option<i64> = sqlx::query_scalar(
+            "SELECT suppressed_count FROM replan_trigger_state WHERE goal_id = 'g1'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(count.unwrap_or(0) == 0);
+    }
+
+    #[tokio::test]
+    async fn hook_suppressed_event_still_recorded() {
+        let pool = setup_db().await;
+        insert_goal(&pool, "g1", 0, 0).await;
+
+        // 离散命令钩子仍保留 suppressed 埋点（AC-10）
+        let outcome = dispatch_event(&pool, &completed_event("g1")).await.unwrap();
+        assert_eq!(outcome.decision, "suppressed");
+        let suppressed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM replan_events
+             WHERE goal_id = 'g1' AND status = 'suppressed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(suppressed, 1);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT suppressed_count FROM replan_trigger_state WHERE goal_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn apply_refreshes_trigger_cooldown() {
+        let pool = setup_db().await;
+        insert_goal(&pool, "g1", 1, 0).await;
+
+        let r1 = check_triggers(&pool).await.unwrap();
+        assert_eq!(r1.pending_count, 1, "{:?}", r1.goals);
+
+        // 手动应用一次规划
+        let plan = crate::services::replan::planner::solve(
+            &pool,
+            &ReplanSolveInput {
+                goal_id: "g1".into(),
+                scope: "subtree".into(),
+                goal_ids: None,
+                dry_run: true,
+                overrides: None,
+                expected_plan_hash: None,
+            },
+        )
+        .await
+        .unwrap();
+        crate::services::replan::apply(
+            &pool,
+            &ReplanApplyInput {
+                goal_id: "g1".into(),
+                plan_hash: plan.plan_hash.clone(),
+                scope: "subtree".into(),
+                goal_ids: None,
+                event_id: None,
+                overrides: None,
+                excluded_task_ids: None,
+                accept_risk: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 应用后进入冷却：不会立即再次建议，也不再写 suppressed
+        let r2 = check_triggers(&pool).await.unwrap();
+        assert_eq!(r2.pending_count, 0);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM replan_events WHERE goal_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(total, 2, "应为 pending + applied 两条，无新增噪声");
+        let state_last: Option<String> = sqlx::query_scalar(
+            "SELECT last_auto_replan_at FROM replan_trigger_state WHERE goal_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(state_last.is_some(), "应用后应刷新冷却时间");
     }
 }
 

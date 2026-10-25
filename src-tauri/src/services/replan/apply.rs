@@ -61,6 +61,15 @@ pub async fn apply(pool: &SqlitePool, req: &ReplanApplyInput) -> AppResult<Repla
         return Err(AppError::Business("计划已过期，请重新预览".into()));
     }
 
+    // 受影响目标（去重）：主目标 + 协同目标
+    let mut affected: BTreeSet<String> = req
+        .goal_ids
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    affected.insert(req.goal_id.clone());
+
     let mut tx = pool.begin().await?;
     let now = now_local_ts();
     let updated_ts = now_updated_at_ts();
@@ -191,9 +200,42 @@ pub async fn apply(pool: &SqlitePool, req: &ReplanApplyInput) -> AppResult<Repla
         .await?;
     }
 
-    // ---------- 5. 受影响目标（去重）与回查任务 ----------
-    let mut affected: BTreeSet<String> = BTreeSet::new();
-    affected.insert(req.goal_id.clone());
+    // ---------- 4.5 风险标记（SC-12 / AC-35） ----------
+    // 接受风险 → 目标标记 at_risk；随后应用可行计划 → 自动清除过期风险标记
+    for gid in &affected {
+        if req.accept_risk {
+            sqlx::query("UPDATE goals SET risk_flag = 'at_risk' WHERE id = ?")
+                .bind(gid)
+                .execute(&mut *tx)
+                .await?;
+        } else if plan.feasibility.feasible {
+            sqlx::query("UPDATE goals SET risk_flag = NULL WHERE id = ? AND risk_flag = 'at_risk'")
+                .bind(gid)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    // ---------- 4.6 刷新触发冷却 ----------
+    // 应用（手动或自动）即视为一次重排：写入 last_auto_replan_at，
+    // 避免 check_triggers 在应用后立即又生成一轮建议（抖动/事件噪声）。
+    for gid in &affected {
+        sqlx::query(
+            "INSERT INTO replan_trigger_state
+             (goal_id, last_snapshot_hash, last_auto_replan_at, suppressed_count, updated_at)
+             VALUES (?, NULL, ?, 0, ?)
+             ON CONFLICT(goal_id) DO UPDATE SET
+               last_auto_replan_at = excluded.last_auto_replan_at,
+               updated_at          = excluded.updated_at",
+        )
+        .bind(gid)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // ---------- 5. 回查受影响任务 ----------
     let tasks: Vec<Task> = if changed.is_empty() {
         Vec::new()
     } else {

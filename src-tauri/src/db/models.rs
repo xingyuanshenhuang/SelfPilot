@@ -51,6 +51,15 @@ fn validate_qty(v: f64) -> Result<(), ValidationError> {
     }
 }
 
+/// 校验开关值：仅允许 0（关闭）或 1（开启）
+fn validate_switch(v: i64) -> Result<(), ValidationError> {
+    if v == 0 || v == 1 {
+        Ok(())
+    } else {
+        Err(ValidationError::new("开关值只能为 0 或 1"))
+    }
+}
+
 /// 校验鼓励语文本：非空白且不超过 100 字
 fn validate_encouragement_text(s: &str) -> Result<(), ValidationError> {
     if s.trim().is_empty() {
@@ -246,6 +255,28 @@ pub struct UpdateGoalInput {
     #[serde(default)]
     #[validate(custom(function = "validate_qty"))]
     pub daily_capacity: Option<f64>,
+}
+
+/// 目标级自动化规划开关（读写 goals.auto_replan / goals.auto_apply）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalAutomationPolicy {
+    pub goal_id: String,
+    /// 是否允许系统事件自动触发重排（1=允许，0=关闭；手动请求不受限）
+    pub auto_replan: i64,
+    /// 是否允许无需确认直接应用（1=开启，0=关闭）
+    pub auto_apply: i64,
+}
+
+/// 更新目标级自动化开关（仅传入的字段生效）
+#[derive(Debug, Clone, Deserialize, Validate)]
+pub struct UpdateGoalAutomationInput {
+    pub goal_id: String,
+    #[serde(default)]
+    #[validate(custom(function = "validate_switch"))]
+    pub auto_replan: Option<i64>,
+    #[serde(default)]
+    #[validate(custom(function = "validate_switch"))]
+    pub auto_apply: Option<i64>,
 }
 
 /// 重复拆解输入（纯文字类任务：按频率重复 or 单次）
@@ -1064,6 +1095,9 @@ pub struct ReplanApplyInput {
     /// 逐任务排除本次调整（与 overrides.excluded_task_ids 合并）
     #[serde(default)]
     pub excluded_task_ids: Option<Vec<String>>,
+    /// 用户选择「接受风险」照常应用（落库后目标标记 at_risk）
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 /// 单任务放置结果

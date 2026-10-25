@@ -219,7 +219,7 @@ async function handleSave() {
           />
           <template #feedback>
             <span class="text-xs text-gray-400">
-              仅对开启了「自动应用」的目标生效（目标级开关）
+              仅对开启了「自动应用」的目标生效（可在目标行点击机器人图标设置）
             </span>
           </template>
         </NFormItem>

@@ -21,6 +21,8 @@ export interface GoalTreeApi {
   handleReplanPreview: (goal: Goal) => void;
   /** 打开重新规划历史时间线 */
   openReplanHistory: (goal: Goal) => void;
+  /** 打开目标级自动化规划设置（auto_replan / auto_apply） */
+  openGoalAutomationSettings: (goal: Goal) => void;
   handleDeleteGoal: (goal: Goal) => void;
   buildTaskActions: (task: Task) => DropdownOption[];
   handleTaskAction: (key: string, task: Task) => void;
@@ -423,6 +425,17 @@ const isDraggingThisGoal = computed(
               总量：{{ node.goal.total_qty }}{{ node.goal.unit }}
             </span>
             <span>进度：{{ Math.round(node.progress * 100) }}%</span>
+            <!-- 风险角标：已接受不可行计划（SC-12 / AC-35） -->
+            <NTooltip v-if="node.goal.risk_flag === 'at_risk'" placement="top">
+              <template #trigger>
+                <Icon
+                  icon="mdi:alert-outline"
+                  width="14"
+                  class="text-amber-500 flex-shrink-0"
+                />
+              </template>
+              该计划不可行，你已选择「接受风险」；应用可行计划后自动清除
+            </NTooltip>
             <NProgress
               v-if="!isRoot"
               type="line"
@@ -431,6 +444,15 @@ const isDraggingThisGoal = computed(
               :height="4"
               style="width: 80px"
             />
+            <!-- 自动应用开关状态（系统事件可直接改写排期） -->
+            <NTooltip v-if="node.goal.auto_apply === 1" placement="top">
+              <template #trigger>
+                <NTag size="tiny" type="warning" :bordered="false">
+                  自动应用
+                </NTag>
+              </template>
+              该目标已允许系统事件无需确认直接调整任务排期
+            </NTooltip>
             <NTag
               v-if="node.is_completed"
               size="tiny"
@@ -518,6 +540,19 @@ const isDraggingThisGoal = computed(
               </NButton>
             </template>
             查看该目标的重新规划历史并可撤销
+          </NTooltip>
+          <!-- 自动化规划设置（目标级开关） -->
+          <NTooltip placement="top">
+            <template #trigger>
+              <NButton
+                size="tiny"
+                quaternary
+                @click="api.openGoalAutomationSettings(node.goal)"
+              >
+                <template #icon><Icon icon="mdi:robot-outline" /></template>
+              </NButton>
+            </template>
+            自动化规划设置
           </NTooltip>
           <!-- 任务 -->
           <NButton

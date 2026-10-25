@@ -1,8 +1,10 @@
 import { invokeCommand } from "./client";
 import type {
   Goal,
+  GoalAutomationPolicy,
   CreateGoalInput,
   UpdateGoalInput,
+  UpdateGoalAutomationInput,
   Task,
   ReplanPreview,
   ReplanResult,
@@ -37,6 +39,20 @@ export async function updateGoal(input: UpdateGoalInput): Promise<Goal> {
 
 export async function deleteGoal(id: string): Promise<void> {
   return invokeCommand("delete_goal", { id });
+}
+
+/** 读取目标级自动化规划开关 */
+export async function getGoalAutomation(
+  goalId: string,
+): Promise<GoalAutomationPolicy> {
+  return invokeCommand("get_goal_automation", { goalId });
+}
+
+/** 更新目标级自动化规划开关 */
+export async function updateGoalAutomation(
+  input: UpdateGoalAutomationInput,
+): Promise<GoalAutomationPolicy> {
+  return invokeCommand("update_goal_automation", { input });
 }
 
 export async function autoSplit(goalId: string): Promise<Task[]> {
