@@ -13,5 +13,7 @@ pub mod allocator;
 pub mod constraints;
 pub mod dag_scheduler;
 pub mod feasibility;
+pub mod repair;
+pub mod rules;
 pub mod snapshot;
 pub mod types;

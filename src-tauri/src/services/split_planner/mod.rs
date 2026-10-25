@@ -29,7 +29,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -41,14 +41,17 @@ use crate::services::planner::constraints::{
 };
 use crate::services::planner::dag_scheduler::{schedule_dag, PlacementReason, SchedTask};
 use crate::services::planner::feasibility::{build_remedies, check_feasibility};
+use crate::services::planner::repair;
+use crate::services::planner::rules;
 use crate::services::planner::snapshot::{load_snapshot, DaySlot, HorizonSpan, PlanSnapshot};
 use crate::services::planner::types::{
     AppliedRule, ConstraintSpec, ConstraintsLayer, FeasibilityReport, FeasibilityStatus,
-    HorizonInput, LegacySpec, Objective, PhaseSpec, PlanDiagnostics, PlanItem, PlanSummary,
-    PlanWarning, PlanningSpec, ResolvedHorizon, ResolvedPlanMeta, ReviewSpec, Scope,
-    SmartSplitRequest, SplitPattern, SplitPlan, SplitShape, TaskType, UnifiedPlanRequest,
+    HabitProfile, HorizonInput, LegacySpec, Objective, PhaseSpec, PlanDiagnostics, PlanItem,
+    PlanSummary, PlanWarning, PlanningSpec, ResolvedHorizon, ResolvedPlanMeta, ReviewSpec,
+    Scope, SmartSplitRequest, SplitPattern, SplitPlan, SplitShape, TaskType, UnifiedPlanRequest,
     ENGINE_VERSION, MIN_PHASES,
 };
+use crate::services::replan::learning;
 use crate::util::parse_date_or_param;
 
 /// 默认学习任务命名模板（与旧引擎「目标名 - 第N天」对齐）
@@ -960,7 +963,13 @@ pub async fn solve(pool: &SqlitePool, req: &SmartSplitRequest) -> AppResult<Spli
     if req.legacy.is_some() {
         solve_legacy(req, &goal, &snapshot, &compiled)
     } else {
-        solve_new(req, &unified, &snapshot, &compiled)
+        // 习惯画像为只读装配；未启用或读取失败时按冷启动处理（不阻断拆解）
+        let profile = if unified.learning.use_habit_profile.unwrap_or(true) {
+            learning::load_planning_profile(pool).await.ok()
+        } else {
+            None
+        };
+        solve_new(req, &unified, &snapshot, &compiled, profile.as_ref())
     }
 }
 
@@ -970,18 +979,36 @@ fn solve_new(
     unified: &UnifiedPlanRequest,
     snapshot: &PlanSnapshot,
     compiled: &CompiledSpec,
+    profile: Option<&learning::PlanningProfile>,
 ) -> AppResult<SplitPlan> {
     let mut warnings: Vec<PlanWarning> = Vec::new();
     let mut applied_rules: Vec<AppliedRule> = Vec::new();
 
-    // ---------- ⑥ 模式选择 ----------
+    // ---------- ⑥ 特征提取 + 规则引擎 R-01~R-15 ----------
     let shape = req.structure.shape.unwrap_or_default();
-    let pattern = resolve_pattern(
-        shape,
-        unified.objective,
-        req.structure.phases.as_deref(),
-        req.structure.review.as_ref(),
+    let features = rules::extract_features(
+        &snapshot.root_goal,
+        unified,
+        snapshot,
+        compiled,
+        profile,
     );
+    let rule_plan = rules::evaluate_rules(&features);
+    // 规则修正（容量基线 / 最小粒度 / 周末系数 / 当日负载权重）落到编译约束副本
+    let compiled_eff = rule_plan.apply_to_spec(compiled);
+    let compiled = &compiled_eff;
+
+    let pattern = if shape == SplitShape::Auto {
+        rule_plan.pattern
+    } else {
+        resolve_pattern(
+            shape,
+            unified.objective,
+            req.structure.phases.as_deref(),
+            req.structure.review.as_ref(),
+        )
+    };
+    applied_rules.extend(rule_plan.matched.iter().cloned());
     applied_rules.push(AppliedRule {
         id: "F-04".to_string(),
         dimension: "structure".to_string(),
@@ -993,11 +1020,7 @@ fn solve_new(
     });
 
     // ---------- 权重整形（阶段段切分 + 曲线） ----------
-    let avail_count = compiled
-        .days
-        .iter()
-        .filter(|d| d.available && !d.is_rest)
-        .count();
+    let avail_count = compiled.effective_days as usize;
     let segments = match pattern {
         SplitPattern::Phased | SplitPattern::Hybrid | SplitPattern::MilestoneBackward => req
             .structure
@@ -1194,18 +1217,19 @@ fn solve_new(
         tagged.push(((placement.date, 0, n, 0), item));
     }
 
-    // 复习注入（间隔重复：学习日 + interval 天）
-    let review_cfg = req
-        .structure
-        .review
-        .as_ref()
-        .filter(|r| r.enabled.unwrap_or(false) && !r.intervals.is_empty());
+    // 复习注入（间隔重复：学习日 + interval 天；R-07 可自动注入默认间隔）
+    let review_cfg = rule_plan.review.as_ref();
     if review_cfg.is_some() {
         applied_rules.push(AppliedRule {
             id: "REVIEW-INJECT".to_string(),
             dimension: "structure".to_string(),
             note: format!(
-                "间隔重复注入（复习量系数 {}）",
+                "间隔重复注入（{}；复习量系数 {}）",
+                if rule_plan.review_auto {
+                    "R-07 自动默认间隔 1/2/4/7/15"
+                } else {
+                    "显式复习配置"
+                },
                 fmt_qty(review_cfg.and_then(|r| r.review_ratio).unwrap_or(DEFAULT_REVIEW_RATIO))
             ),
         });
@@ -1313,70 +1337,30 @@ fn solve_new(
         it.seq = (i + 1) as u32;
     }
 
-    // ---------- ⑭ 不变式校验（防御性复核，违反记 warning） ----------
-    let day_map: HashMap<NaiveDate, (bool, bool)> = compiled
-        .days
-        .iter()
-        .map(|d| (d.date, (d.available, d.is_rest)))
-        .collect();
-    for it in &items {
-        match day_map.get(&it.plan_date) {
-            None => warnings.push(PlanWarning {
-                code: "W-INV3".to_string(),
-                date: Some(it.plan_date.format("%Y-%m-%d").to_string()),
-                message: "计划日期不在规划视界内（INV-3）".to_string(),
-            }),
-            Some((avail, rest)) if !*avail || *rest => warnings.push(PlanWarning {
-                code: "W-INV3".to_string(),
-                date: Some(it.plan_date.format("%Y-%m-%d").to_string()),
-                message: "计划日期落入黑名单或非允许星期（INV-3/INV-4）".to_string(),
-            }),
-            _ => {}
-        }
-        let weekday = it.plan_date.weekday().num_days_from_sunday() as u8;
-        if !compiled.allowed_weekdays.contains(&weekday) {
-            warnings.push(PlanWarning {
-                code: "W-INV4".to_string(),
-                date: Some(it.plan_date.format("%Y-%m-%d").to_string()),
-                message: "计划日期的星期不在允许集合（INV-4）".to_string(),
-            });
-        }
+    // ---------- ⑭ 多轮修复循环（INV-1~INV-8，≤5 轮） ----------
+    let repair_outcome = repair::run_repair_loop(items, compiled, rule_plan.dependency_chain);
+    if repair_outcome.rounds > 0 && repair_outcome.converged {
+        applied_rules.push(AppliedRule {
+            id: "REPAIR".to_string(),
+            dimension: "safety".to_string(),
+            note: format!(
+                "修复循环 {} 轮后满足 INV-1~INV-8",
+                repair_outcome.rounds
+            ),
+        });
     }
-    if let Some(m) = compiled.max_daily_qty {
-        for it in &items {
-            if it.task_type == TaskType::Learn && it.plan_qty > m + QTY_EPS {
-                warnings.push(PlanWarning {
-                    code: "W-OVERFLOW-TAIL".to_string(),
-                    date: Some(it.plan_date.format("%Y-%m-%d").to_string()),
-                    message: format!(
-                        "任务量 {} 超过单日上限 {}（容量不足的防御性兜底，INV-5）",
-                        fmt_qty(it.plan_qty),
-                        fmt_qty(m)
-                    ),
-                });
-            }
-        }
-    }
-    if min_chunk > QTY_EPS {
-        for it in &items {
-            if it.task_type == TaskType::Learn
-                && it.plan_qty > QTY_EPS
-                && it.plan_qty < min_chunk - QTY_EPS
-            {
-                warnings.push(PlanWarning {
-                    code: "W-CHUNK-UNDERSIZED".to_string(),
-                    date: Some(it.plan_date.format("%Y-%m-%d").to_string()),
-                    message: format!(
-                        "任务量 {} 低于最小粒度 {}（尾差未再切分，INV-6）",
-                        fmt_qty(it.plan_qty),
-                        fmt_qty(min_chunk)
-                    ),
-                });
-            }
-        }
-    }
+    warnings.extend(repair_outcome.warnings);
+    let items = repair_outcome.items;
 
     // ---------- ⑮⑯ 组装（守恒显式校验 + plan_hash） ----------
+    let habit_profile = profile.filter(|p| p.samples > 0).map(|p| HabitProfile {
+        version: p.version.max(0) as u32,
+        samples: p.samples as u32,
+        adapt_strength: features.adapt_strength,
+        speed_factor: p.speed_factor,
+        weekday_capacity: p.weekday_capacity.to_vec(),
+        preferred_chunk: p.preferred_chunk,
+    });
     assemble_plan(
         &req.goal_id,
         req.api_version,
@@ -1393,7 +1377,7 @@ fn solve_new(
         feasibility,
         PlanDiagnostics {
             applied_rules,
-            habit_profile: None,
+            habit_profile,
             warnings,
         },
         true,
