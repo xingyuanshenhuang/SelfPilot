@@ -48,9 +48,13 @@ import RichTextEditor from "@/components/RichTextEditor.vue";
 import SmartSplitDialog from "@/components/SmartSplitDialog.vue";
 import ReplanPreviewDrawer from "@/components/ReplanPreviewDrawer.vue";
 import ReplanEventTimeline from "@/components/ReplanEventTimeline.vue";
+import ReplanSuggestionBar from "@/components/ReplanSuggestionBar.vue";
+import ReplanTriggerSettings from "@/components/ReplanTriggerSettings.vue";
+import { useReplanStore } from "@/stores/replanStore";
 
 const goalStore = useGoalStore();
 const taskStore = useTaskStore();
+const replanStore = useReplanStore();
 const message = useMessage();
 const dialog = useDialog();
 
@@ -164,6 +168,36 @@ const showReplanDrawer = ref(false);
 const showReplanHistory = ref(false);
 const replanGoal = ref<Goal | null>(null);
 
+// ===== 触发网关（阶段 4）=====
+const showTriggerSettings = ref(false);
+/** 建议条数据源：仅展示已放行（proceed）的评估结果 */
+const suggestionGoals = computed(
+  () => replanStore.pendingTriggers?.goals ?? [],
+);
+
+/** 扁平化目标树（供协同多选 / 按 id 查找） */
+const flatGoals = computed(() => {
+  const out: Goal[] = [];
+  function walk(nodes: GoalTreeNode[]) {
+    for (const n of nodes) {
+      out.push(n.goal);
+      walk(n.sub_goals);
+    }
+  }
+  walk(goalStore.goalTree);
+  return out;
+});
+
+/** 刷新触发检查（进入视图 / 手动刷新 / 规划后） */
+async function refreshTriggers() {
+  try {
+    await replanStore.checkTriggers();
+  } catch (e) {
+    // 触发检查失败不阻断主流程（例如旧版后端无该命令）
+    console.warn("触发检查失败", e);
+  }
+}
+
 // ===== 任务描述弹窗（查看 + 编辑）=====
 const showTaskDescModal = ref(false);
 const taskDescForm = reactive({
@@ -176,6 +210,7 @@ const taskDescForm = reactive({
 onMounted(async () => {
   await goalStore.fetchGoalTree();
   await goalStore.fetchProgresses();
+  await refreshTriggers();
 });
 
 // ===== 目标创建/编辑 =====
@@ -1117,6 +1152,21 @@ async function handleReplanSuccess() {
   await goalStore.fetchGoalTree();
   await goalStore.fetchProgresses();
   showReplanDrawer.value = false;
+  await refreshTriggers();
+}
+
+/** 建议条「立即规划」：按 goal_id 定位目标并打开抽屉 */
+function handlePlanFromSuggestion(goalId: string) {
+  const goal = flatGoals.value.find((g) => g.id === goalId);
+  if (!goal) {
+    message.warning("目标不存在或已被删除");
+    return;
+  }
+  openReplanDrawer(goal);
+}
+
+function handleDismissSuggestion(goalId: string) {
+  replanStore.dismissTrigger(goalId);
 }
 async function handleReplanHistorySuccess() {
   await goalStore.fetchGoalTree();
@@ -1344,6 +1394,10 @@ provide(goalTreeApiKey, treeApi);
         目标树
       </h2>
       <NSpace>
+        <NButton @click="showTriggerSettings = true">
+          <template #icon><Icon icon="mdi:bell-cog-outline" /></template>
+          触发设置
+        </NButton>
         <NButton @click="openTemplateModal">
           <template #icon><Icon icon="mdi:clipboard-list-outline" /></template>
           使用模板
@@ -1364,6 +1418,15 @@ provide(goalTreeApiKey, treeApi);
         支持任意层级嵌套子目标；每个子目标可设置独立的总量、单位和截止日期，实现分阶段拆解（如先看视频后做题）；任务行可拖拽到其他目标下调整归属。点击「使用模板」快速创建分阶段目标结构，点击「自动拆解」按截止日期/时间预算/日期范围生成每日任务。
       </span>
     </div>
+
+    <!-- 规划建议条（触发网关待确认事件，阶段 4） -->
+    <ReplanSuggestionBar
+      :goals="suggestionGoals"
+      :loading="replanStore.checkingTriggers"
+      @plan="handlePlanFromSuggestion"
+      @dismiss="handleDismissSuggestion"
+      @refresh="refreshTriggers"
+    />
 
     <!-- 目标树 -->
     <div v-if="goalStore.goalTree.length > 0" class="space-y-2">
@@ -1978,6 +2041,7 @@ provide(goalTreeApiKey, treeApi);
     <ReplanPreviewDrawer
       v-if="replanGoal"
       :goal="replanGoal"
+      :goals="flatGoals"
       v-model:show="showReplanDrawer"
       @success="handleReplanSuccess"
       @open-history="openReplanHistory(replanGoal)"
@@ -1988,5 +2052,8 @@ provide(goalTreeApiKey, treeApi);
       v-model:show="showReplanHistory"
       @success="handleReplanHistorySuccess"
     />
+
+    <!-- 触发设置（阶段 4） -->
+    <ReplanTriggerSettings v-model:show="showTriggerSettings" />
   </div>
 </template>

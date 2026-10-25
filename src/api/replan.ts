@@ -12,12 +12,14 @@
  */
 import { invokeCommand } from "./client";
 import type {
+  FeedbackInput,
   ReplanApplyInput,
   ReplanApplyResult,
   ReplanEvent,
   ReplanEventDetail,
   ReplanPlan,
   ReplanSolveInput,
+  TriggerReport,
 } from "@/types";
 
 /** 重新规划 · 预览（只读求解，永不落库） */
@@ -57,4 +59,16 @@ export async function replanEventDetail(
   event_id: string,
 ): Promise<ReplanEventDetail> {
   return invokeCommand<ReplanEventDetail>("replan_event_detail", { event_id });
+}
+
+/** 触发网关 · 批量检查（超期/过载/周期复评），返回各目标决策 */
+export async function replanCheckTriggers(): Promise<TriggerReport> {
+  return invokeCommand<TriggerReport>("replan_check_triggers");
+}
+
+/** 画像学习 · 记录反馈信号（写 split_feedback 并 EWMA 更新画像） */
+export async function replanRecordFeedback(
+  req: FeedbackInput,
+): Promise<void> {
+  return invokeCommand<void>("replan_record_feedback", { req });
 }

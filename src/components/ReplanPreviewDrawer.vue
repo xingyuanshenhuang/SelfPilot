@@ -26,6 +26,7 @@ import {
   NInputNumber,
   NSwitch,
   NSpace,
+  NSelect,
   NDivider,
   NSpin,
   NAlert,
@@ -42,6 +43,8 @@ import InfeasibilityDialog from "./InfeasibilityDialog.vue";
 const props = defineProps<{
   goal: Goal | null;
   show: boolean;
+  /** 可供协同规划的目标列表（同层/所有目标，供多选） */
+  goals?: Goal[];
 }>();
 
 const emit = defineEmits<{
@@ -90,15 +93,30 @@ const respectLocksModel = computed<boolean>({
   },
 });
 
+// ===== 协同目标（阶段 4 A5）=====
+/** 可协同目标：排除当前目标 */
+const coordinateOptions = computed(() =>
+  (props.goals ?? [])
+    .filter((g) => g.id !== props.goal?.id)
+    .map((g) => ({ label: g.name, value: g.id })),
+);
+/** 选中即切换 scope=coordinate，清空回到 subtree */
+const coordinateModel = computed<string[]>({
+  get: () => store.coordinateGoalIds,
+  set: (v) => store.setCoordinate(v ?? []),
+});
+
 // ===== what-if 防抖重算 =====
 const paramsSig = computed(() => {
   const o = store.overrides;
   return [
+    store.scope,
+    store.coordinateGoalIds.slice().sort().join(","),
     o.deadline ?? "",
     String(o.daily_capacity ?? ""),
     String(o.intensity ?? ""),
     String(o.respect_locks ?? ""),
-    store.excludedTaskIds.join(","),
+    store.excludedTaskIds.slice().sort().join(","),
   ].join("|");
 });
 
@@ -614,6 +632,31 @@ function onAcceptRisk() {
               <div class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
                 <Icon icon="mdi:information-outline" width="14" />
                 调整后自动重算（已排除 {{ excludedCount }} 项）。仅影响本次预览，不写回数据库。
+              </div>
+              <!-- 协同目标多选（阶段 4 A5）：选中后按最大最小公平分摊全局额度 -->
+              <div
+                v-if="coordinateOptions.length > 0"
+                class="flex items-center gap-2 border-t border-gray-100 dark:border-surface-muted pt-3"
+              >
+                <span class="text-xs text-gray-500 w-14 shrink-0">协同目标</span>
+                <NSelect
+                  v-model:value="coordinateModel"
+                  :options="coordinateOptions"
+                  multiple
+                  clearable
+                  filterable
+                  size="small"
+                  placeholder="可选：与其他目标一起分配每日额度"
+                  class="flex-1"
+                />
+              </div>
+              <div
+                v-if="store.scope === 'coordinate'"
+                class="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1"
+              >
+                <Icon icon="mdi:account-group-outline" width="14" />
+                协同规划：{{ store.coordinateGoalIds.length + 1 }} 个目标共享每日额度，
+                优先保障进度落后/优先级高的目标
               </div>
             </div>
 

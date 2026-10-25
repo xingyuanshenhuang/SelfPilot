@@ -901,6 +901,8 @@ export interface ReplanApplyInput {
   /** 预览时返回的 plan_hash（一致性校验） */
   plan_hash: string;
   scope?: ReplanScope;
+  /** 协同规划时的目标 ID 列表（须与预览一致，保证 apply 重解 hash 相同） */
+  goal_ids?: string[];
   /** 预览时携带的事件 id（预览阶段已落 previewed 事件时回填） */
   event_id?: string;
   /** 预览时使用的 what-if 覆盖参数（须与预览一致） */
@@ -1047,4 +1049,64 @@ export interface ReplanEventDiff {
 export interface ReplanEventDetail {
   event: ReplanEvent;
   diffs: ReplanEventDiff[];
+}
+
+// ============================================================================
+// 触发网关与画像学习（阶段 4）
+// ============================================================================
+
+/** 触发事件类型（9 类） */
+export type ReplanTriggerType =
+  | "task_completed"
+  | "task_skipped"
+  | "overdue_accumulated"
+  | "goal_deadline_changed"
+  | "goal_total_changed"
+  | "progress_lag"
+  | "load_overload"
+  | "periodic_review"
+  | "manual_request";
+
+/** 单个目标的触发评估结果 */
+export interface TriggerGoalResult {
+  goal_id: string;
+  goal_name: string;
+  /** proceed | auto_apply | suppressed */
+  decision: "proceed" | "auto_apply" | "suppressed";
+  trigger_type: string;
+  /** info | warning | critical */
+  severity: string;
+  reason: string | null;
+  suppress_reason: string | null;
+  impact_ratio: number | null;
+  event_id: string | null;
+}
+
+/** 批量触发检查报告 */
+export interface TriggerReport {
+  goals: TriggerGoalResult[];
+  pending_count: number;
+}
+
+/** 画像学习反馈信号（7 类，与后端 validate_feedback_signal 对齐） */
+export type FeedbackSignalType =
+  | "qty_change"
+  | "date_change"
+  | "delete"
+  | "early_finish"
+  | "late_finish"
+  | "skip"
+  | "plan_adopt";
+
+/** 反馈输入（写入 split_feedback 并更新画像） */
+export interface FeedbackInput {
+  goal_id: string;
+  task_id: string;
+  signal_type: FeedbackSignalType;
+  plan_date?: string | null;
+  planned_qty?: number | null;
+  actual_qty?: number | null;
+  final_qty?: number | null;
+  date_shift?: number | null;
+  chosen_pattern?: string | null;
 }
